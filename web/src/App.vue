@@ -29,6 +29,7 @@
           <router-link to="/user" class="popup-item" @click="closeSettingsMenu">用户 USER</router-link>
           <router-link to="/path-whitelist" class="popup-item" @click="closeSettingsMenu">路径白名单</router-link>
           <router-link to="/sonetto-blocker" class="popup-item" @click="closeSettingsMenu">拒止锚</router-link>
+          <router-link to="/backup" class="popup-item" @click="closeSettingsMenu">配置备份</router-link>
         </div>
       </Transition>
       <SessionSidebar

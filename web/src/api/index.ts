@@ -18,6 +18,7 @@ import type {
   ConstifyResponse,
   WhitelistEntry,
   ListWhitelistResponse,
+  ImportBackupResponse,
   BlockerEntry,
   ListBlockerResponse,
 } from '@/types'
@@ -202,4 +203,25 @@ export const api = {
 
   deleteBlocker: (index: number) =>
     request<{ status: string }>(`/sonetto-blocker/${index}`, { method: 'DELETE' }),
+
+  // ── 配置备份 ──
+
+  exportBackup: async () => {
+    const res = await fetch(`${BASE}/backup/export`)
+    if (!res.ok) throw new Error(`导出失败: ${res.status}`)
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `sonetto-backup-${Date.now()}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  },
+
+  importBackup: (jsonContent: string) =>
+    request<ImportBackupResponse>('/backup/import', {
+      method: 'POST',
+      body: jsonContent,
+      headers: { 'Content-Type': 'application/json' },
+    }),
 }
