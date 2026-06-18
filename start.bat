@@ -1,4 +1,5 @@
 @echo off
+REM 非 Windows 系统请直接运行: python setup.py ^&^& python main.py
 
 cd /d "%~dp0"
 
@@ -8,22 +9,21 @@ echo ========================================
 echo.
 
 if not exist "main.py" (
-    echo [ERR] Run this script from the project root.
+    echo [ERR] 请确保在项目根目录运行此脚本。
     pause
     exit /b 1
 )
 
 if not exist ".venv\Scripts\python.exe" (
-    echo [ERR] Virtual env not found. Run:
-    echo        python -m venv .venv
-    echo        .venv\Scripts\pip install -r requirements.txt
+    echo [ERR] 虚拟环境未找到。请先运行 setup.bat 完成初始化。
+    echo       或直接执行: python setup.py
     pause
     exit /b 1
 )
 
 if not exist "web\node_modules" (
-    echo [ERR] Frontend dependencies not found. Run:
-    echo        cd web ^&^& npm install
+    echo [ERR] 前端依赖未安装。请先运行 setup.bat 完成初始化。
+    echo       或直接执行: python setup.py
     pause
     exit /b 1
 )

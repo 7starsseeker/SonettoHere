@@ -2,6 +2,8 @@
 用法: python setup.py
 """
 
+import base64
+import json
 import os
 import shutil
 import subprocess
@@ -26,24 +28,27 @@ def welcome(total: int):
     print()
     print(f"一共 {total} 步，分别是：")
     print()
-    print("  [1/6 全自动]  检查 Node.js 是否安装")
+    print("  [1/7 全自动]  检查 Node.js 是否安装")
     print("         确保你的电脑有 JavaScript 运行环境，这是Sonetto前端界面的基础")
     print()
-    print("  [2/6 全自动]  创建 Python 虚拟环境，安装后端依赖")
+    print("  [2/7 全自动]  创建 Python 虚拟环境，安装后端依赖")
     print("         会在当前目录创建 .venv 文件夹")
     print("         （内含 Python 解释器和所有需要的库）")
     print()
-    print("  [3/6 全自动]  安装前端依赖")
+    print("  [3/7 全自动]  安装前端依赖")
     print("         下载 Vue 页面所需的 npm 包")
     print("         会在 web/node_modules/ 存放数百个小文件")
     print()
-    print("  [4/6 全自动]  生成 .env 配置文件")
+    print("  [4/7 全自动]  生成 .env 配置文件")
     print("         从 .env.example 复制一份，用来保存一些工具需要的 API 密钥")
     print()
-    print("  [5/6 手动输入]  配置 LLM 提供商（对话必需）")
+    print("  [5/7 可选]  从备份恢复配置")
+    print("         如有之前导出的备份 .json，拖入即可自动恢复")
+    print()
+    print("  [6/7 手动输入]  配置 LLM 提供商（对话必需）")
     print("         填写 Base URL 和 API Key，自动测试连接并保存可用模型")
     print()
-    print("  [6/6 手动输入]  设定你的称呼，配置 AI 个性")
+    print("  [7/7 手动输入]  设定你的称呼，配置 AI 个性")
     print("         告诉 Sonetto 如何称呼你，自动完成个性文件设置")
     print()
     print("对电脑的影响：")
@@ -147,7 +152,6 @@ def setup_env():
 
 def setup_provider():
     """引导用户添加 LLM 提供商，测试连接后保存至 providers.yaml。"""
-    import json
     import re
     import urllib.error
     import urllib.request
@@ -158,14 +162,46 @@ def setup_provider():
     print("  如果暂时跳过，之后可以随时在网页端 /providers 页面配置。")
     print()
 
+    # 从备份中获取默认值
+    backup_yaml = _backup_get("providers.yaml")
+    backup_url = ""
+    backup_key = ""
+    if backup_yaml:
+        for line in backup_yaml.splitlines():
+            if line.strip().startswith("base_url:"):
+                backup_url = line.split(":", 1)[1].strip()
+            elif line.strip().startswith("api_key:"):
+                backup_key = line.split(":", 1)[1].strip()
+        if backup_url:
+            print(f"  [i] 从备份中读取到 LLM 提供商: {backup_url}")
+            choice = input("  直接恢复备份中的提供商配置？(y/N): ").strip().lower()
+            if choice == "y":
+                yaml_path = os.path.join(PROJECT_ROOT, "providers.yaml")
+                with open(yaml_path, "w", encoding="utf-8") as f:
+                    f.write(backup_yaml)
+                ok("提供商配置已从备份恢复")
+                return True
+            print()
+
     while True:
         print("-" * 40)
-        base_url = input("  Base URL（如 https://api.deepseek.com/v1）: ").strip()
+        default_url = backup_url or "https://api.deepseek.com/v1"
+        prompt_url = f"  Base URL（直接按 Enter 使用: {default_url}）: "
+        base_url = input(prompt_url).strip()
+        if not base_url:
+            base_url = default_url
+            if backup_url:
+                ok(f"已使用备份中的 Base URL: {base_url}")
+
         if not base_url:
             skip("已跳过 LLM 提供商配置，之后可在网页端配置")
             return True
 
-        api_key = input("  API Key（sk-...）: ").strip()
+        prompt_key = f"  API Key（{'直接按 Enter 使用备份中的 Key' if backup_key else 'sk-...'}）: "
+        api_key = input(prompt_key).strip()
+        if not api_key and backup_key:
+            api_key = backup_key
+            ok("已使用备份中的 API Key")
         if not api_key:
             skip("已跳过 LLM 提供商配置，之后可在网页端配置")
             return True
@@ -251,32 +287,54 @@ def setup_provider():
 
 
 def setup_persona():
-    """询问用户称呼，从模板创建个性文件并替换占位符。"""
+    """询问用户称呼，从模板或备份创建个性文件。"""
     PERSONAS = "config/personas"
     TEMPLATES = {
         "USER.md": "USER.example.md",
         "SOUL.md": "SOUL.example.md",
     }
 
+    # 从备份获取称呼
+    backup_user = _backup_get("config/personas/USER.md")
+    backup_soul = _backup_get("config/personas/SOUL.md")
+    backup_name = ""
+    if backup_user:
+        # 尝试从备份中提取称呼
+        import re
+        m = re.search(r"我的名字是[：:]\s*(\S+)", backup_user)
+        if m:
+            backup_name = m.group(1)
+
     print()
-    name = input('  你希望 Sonetto 怎么称呼你？（直接按 Enter 则默认为”朋友”）: ').strip()
+    default_name = backup_name or ""
+    prompt_name = f'  你希望 Sonetto 怎么称呼你？（{"直接按 Enter 使用备份中的" + backup_name if backup_name else "直接按 Enter 则默认为" + chr(8220) + "朋友" + chr(8221)}）: '
+    name = input(prompt_name).strip()
+    if not name and backup_name:
+        name = backup_name
+        ok(f"已使用备份中的称呼: {name}")
     if not name:
         name = "朋友"
     ok(f"好的，Sonetto 之后会称呼你为「{name}」")
 
     for target, src in TEMPLATES.items():
         target_path = os.path.join(PROJECT_ROOT, PERSONAS, target)
-        src_path = os.path.join(PROJECT_ROOT, PERSONAS, src)
 
+        # 优先使用备份内容
+        backup_content = _backup_get(f"config/personas/{target}")
+        if backup_content:
+            content = backup_content.replace("{{USER_NAME}}", name)
+            with open(target_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            ok(f"{target} 已从备份恢复")
+            continue
+
+        src_path = os.path.join(PROJECT_ROOT, PERSONAS, src)
         if not os.path.exists(src_path):
             print(f"  [!] 模板文件 {src} 不存在，跳过")
             continue
 
-        # 从模板复制/覆盖
         with open(src_path, "r", encoding="utf-8") as f:
             content = f.read()
-
-        # 替换 {{USER_NAME}} 占位符
         content = content.replace("{{USER_NAME}}", name)
 
         with open(target_path, "w", encoding="utf-8") as f:
@@ -286,6 +344,90 @@ def setup_persona():
 
     print("  提示：以后可以随时编辑 config/personas/ 下的文件来调整设定")
     return True
+
+
+# ── 备份恢复 ──────────────────────────────────────────────────
+
+_BACKUP: dict | None = None
+
+
+def load_backup():
+    """询问备份文件路径，加载并解码备份 JSON。"""
+    global _BACKUP
+    print()
+    print("  如果你之前导出过配置备份（.json），可以在此恢复。")
+    print("  将文件拖入窗口，或手动输入完整路径。")
+    print()
+
+    raw = input("  备份文件路径（直接按 Enter 跳过）: ").strip().strip('"').strip("'")
+    if not raw:
+        skip("已跳过备份恢复")
+        return True
+
+    if not os.path.isfile(raw):
+        fail(f"文件不存在: {raw}")
+        return load_backup()
+
+    try:
+        with open(raw, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        fail(f"无法解析备份文件: {e}")
+        return load_backup()
+
+    files = data.get("files")
+    if not isinstance(files, dict):
+        fail("备份文件格式错误：缺少 files 字段")
+        return load_backup()
+
+    # base64 解码所有文件
+    import base64
+    decoded = {}
+    for rel_path, b64 in files.items():
+        try:
+            content = base64.b64decode(b64).decode("utf-8")
+            decoded[rel_path] = content
+        except Exception:
+            pass
+
+    _BACKUP = decoded
+    ok(f"备份已加载，包含 {len(decoded)} 个文件")
+    return True
+
+
+def _backup_get(*paths: str) -> str | None:
+    """从备份中获取指定路径的文件内容。"""
+    if _BACKUP is None:
+        return None
+    for p in paths:
+        if p in _BACKUP:
+            return _BACKUP[p]
+    return None
+
+
+def _restore_backup_files():
+    """恢复备份中除 .env / providers.yaml / personas 之外的其他文件。"""
+    if _BACKUP is None:
+        return
+
+    # 这些文件已被 setup_provider / setup_persona / setup_env 处理
+    skipped = {".env", "providers.yaml", "config/personas/USER.md", "config/personas/SOUL.md", "config/personas/AGENTS.md"}
+
+    count = 0
+    for rel_path, content in _BACKUP.items():
+        if rel_path in skipped:
+            continue
+        full = os.path.join(PROJECT_ROOT, rel_path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        try:
+            with open(full, "w", encoding="utf-8") as f:
+                f.write(content)
+            count += 1
+        except Exception:
+            pass
+
+    if count > 0:
+        ok(f"已恢复 {count} 个文件（白名单/记忆/Skills 等）")
 
 
 def summary():
@@ -323,7 +465,7 @@ def summary():
 
 def main():
     header()
-    total = 6
+    total = 7
 
     welcome(total)
     try:
@@ -348,11 +490,17 @@ def main():
     step(4, total, "环境配置")
     setup_env()
 
-    step(5, total, "LLM 提供商")
+    step(5, total, "备份恢复")
+    load_backup()
+
+    step(6, total, "LLM 提供商")
     setup_provider()
 
-    step(6, total, "AI 个性配置")
+    step(7, total, "AI 个性配置")
     setup_persona()
+
+    # 恢复备份中的其他文件
+    _restore_backup_files()
 
     summary()
 
