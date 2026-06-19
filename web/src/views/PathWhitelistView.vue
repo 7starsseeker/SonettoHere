@@ -124,7 +124,7 @@ function startEdit(i: number) {
   editingIndex.value = i
   formPath.value = entries.value[i].path
   formDesc.value = entries.value[i].description || ''
-  formRecursive.value = entries.value[i].recursive !== false
+  formRecursive.value = entries.value[i].recursive === true
   formError.value = ''
   mode.value = 'form'
 }

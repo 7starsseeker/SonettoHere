@@ -35,7 +35,11 @@ def _load() -> list[dict]:
         return []
     with open(WHITELIST_PATH, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
-    return raw.get("whitelist", []) or []
+    entries = raw.get("whitelist", []) or []
+    for e in entries:
+        if isinstance(e, dict) and "recursive" not in e:
+            e["recursive"] = True
+    return entries
 
 
 def _save(entries: list[dict]) -> None:
