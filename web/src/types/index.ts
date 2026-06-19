@@ -359,6 +359,15 @@ export interface ListWhitelistResponse {
   entries: WhitelistEntry[]
 }
 
+// === 配置备份 ===
+
+export interface ImportBackupResponse {
+  status: string
+  restored_count: number
+  restored_files: string[]
+  backup_version: string
+}
+
 // === SonettoBlocker 拒止锚 ===
 
 export interface BlockerEntry {
