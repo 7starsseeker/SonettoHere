@@ -20,6 +20,7 @@ import type {
   ListWhitelistResponse,
   BlockerEntry,
   ListBlockerResponse,
+  ImportBackupResponse,
 } from '@/types'
 
 declare const __API_TOKEN__: string
@@ -206,6 +207,27 @@ export const api = {
     request<{ blocked: boolean; reason: string | null; blocker_path: string | null }>(
       `/check-path-blocked?path=${encodeURIComponent(path)}`
     ),
+
+  // ── 配置备份 ──
+
+  exportBackup: async () => {
+    const res = await fetch(`${BASE}/backup/export`)
+    if (!res.ok) throw new Error(`导出失败: ${res.status}`)
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `sonetto-backup-${Date.now()}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  },
+
+  importBackup: (jsonContent: string) =>
+    request<ImportBackupResponse>('/backup/import', {
+      method: 'POST',
+      body: jsonContent,
+      headers: { 'Content-Type': 'application/json' },
+    }),
 
   // ── SonettoBlocker 拒止锚 ──
 
