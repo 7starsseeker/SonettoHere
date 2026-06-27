@@ -35,8 +35,6 @@ def _check_auto_approve() -> bool:
     try:
         ws = interaction.current_ws.get()
         # 通过 WebSocket 路径参数获取 session_id，再获取 session
-        from api.session_manager import SessionState  # noqa: F811
-
         session_id = ws.path_params.get("session_id", "")
         if session_id:
             app_state = ws.app.state
