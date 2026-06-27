@@ -256,6 +256,10 @@ async def _run_agent_turn(
     # 1. [准备环境] 从 WebSocket 获取应用状态
     app_state = ws.app.state
     session.auto_approve = auto_approve
+    # 在 ws 对象上直接挂载 auto_approve，避免 ContextVar 在 LangGraph 内传播失效
+    ws.auto_approve = auto_approve
+    # 确保 auto_approve ContextVar 在当前任务上下文生效
+    interaction.auto_approve.set(auto_approve)
     ws_callback = WebSocketCallback(ws)  # WebUI 回调函数系统
 
     # 获取默认上下文窗口大小

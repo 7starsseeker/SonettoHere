@@ -26,6 +26,35 @@ def _exec_code(code: str) -> str:
         sys.stdout = old_stdout
 
 
+def _check_auto_approve() -> bool:
+    """检查自动批准模式。
+
+    优先从 session 获取（最可靠），绕过 ContextVar 在 LangGraph 内的传播失效，
+    回退到 ws 属性挂载，最后回退到 ContextVar。
+    """
+    try:
+        ws = interaction.current_ws.get()
+        # 通过 WebSocket 路径参数获取 session_id，再获取 session
+        from api.session_manager import SessionState  # noqa: F811
+
+        session_id = ws.path_params.get("session_id", "")
+        if session_id:
+            app_state = ws.app.state
+            session = app_state.session_manager.get(session_id)
+            if session is not None and session.auto_approve:
+                return True
+        # 回退：ws 对象上直接挂载的属性
+        if getattr(ws, "auto_approve", False):
+            return True
+    except Exception:
+        pass
+    # 最终回退到 ContextVar
+    try:
+        return interaction.auto_approve.get()
+    except Exception:
+        return False
+
+
 class RunPythonInput(BaseModel):
     get_doc: bool = Field(
         default=False, description="设为 true 以获取使用说明和安全限制"
@@ -50,7 +79,8 @@ class RunPythonTool(ToolBase):
         if not code:
             return format_error("code 不能为空")
 
-        if interaction.auto_approve.get():
+        # 优先从 session 读取 auto_approve（绕过 ContextVar 在 LangGraph 内的传播失效）
+        if _check_auto_approve():
             try:
                 output = await asyncio.to_thread(_exec_code, code)
                 return format_success({"output": output, "code": code})
