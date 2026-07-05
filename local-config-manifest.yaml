@@ -32,7 +32,7 @@ paths:
     gitignored: true
 
   - path: "config/providers.yaml"
-    description: "LLM 提供商配置（base_url / api_key / model / context_window / is_default_provider / default_model）"
+    description: "LLM 提供商配置（base_url / api_key / model / context_window / is_default_provider / default_model / model_context_windows）"
     created_by: "setup.py Step 5 / Web UI /providers 页面"
     source_template: null
     required_for: "对话功能"
@@ -90,7 +90,6 @@ paths:
 
   - path: "config/model_context_windows.yaml"
     description: "模型上下文窗口用户自定义覆盖（优先级高于代码硬编码表）"
-    since_version: 0
     created_by: "M3 自动创建或用户手工编辑"
     source_template: null
     required_for: "上下文窗口值的用户自定义覆盖"
