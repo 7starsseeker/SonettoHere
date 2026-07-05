@@ -397,6 +397,31 @@ async def _run_agent_turn(
                 "payload": {"code": "AGENT_ERROR", "message": str(e)},
             }
         )
+        # 运行时能力修正
+        if provider_id and model_name and hasattr(app_state, "provider_manager"):
+            try:
+                _mgr = app_state.provider_manager
+                _cfg = _mgr.get_config(provider_id)
+                if _cfg is not None:
+                    _err = str(e).lower()
+                    _need = []
+                    if "vision" in _err or "image" in _err or "multimodal" in _err:
+                        _need.append("vision")
+                    if "tool" in _err or "function call" in _err:
+                        _need.append("tool_call")
+                    if "json" in _err or "structure" in _err or "parse" in _err:
+                        _need.append("structured_output")
+                    if _need:
+                        from api.providers.capabilities import get_all_testers, test_model_capabilities
+                        _testers = [t for t in get_all_testers() if t.capability_name in _need]
+                        if _testers:
+                            _res = await test_model_capabilities(_cfg, model_name, _testers)
+                            _mc = _cfg.model_capabilities.get(model_name, {})
+                            _mc.update(_res)
+                            _cfg.model_capabilities[model_name] = _mc
+                            _mgr.save_config(_cfg)
+            except Exception:
+                pass
     finally:
         session._active_task = None
         context_usage = await _calculate_context_usage(
