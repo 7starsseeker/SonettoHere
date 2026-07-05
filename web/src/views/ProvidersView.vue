@@ -140,6 +140,7 @@ import { api } from '@/api'
 import type { ProviderConfig, TestConnectionResponse } from '@/types'
 import { computed, onMounted, ref } from 'vue'
 import Icon from '@/components/Icon.vue'
+import CapabilityBadges from '@/components/CapabilityBadges.vue'
 
 // ── 预设提供商列表 ──
 const presets = [
