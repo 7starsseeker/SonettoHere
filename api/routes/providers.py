@@ -289,7 +289,7 @@ async def discover_models_for_existing(provider_id: str, request: Request):
         config.models = model_names
         mgr.save_config(config)
 
-        result: dict = {"models": model_names}
+        result: dict = {"models": model_names, "model_context_windows": model_context_windows}
         if warning:
             result["default_model_warning"] = warning
         return result
