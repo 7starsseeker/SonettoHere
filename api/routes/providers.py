@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from api.providers import ProviderConfig
-from api.providers.vision import detect_vision_capabilities
+from api.providers.capabilities import get_all_testers, test_model_capabilities
 from api.dependencies import get_llm
 
 router = APIRouter()
@@ -241,3 +241,55 @@ async def discover_models_for_existing(provider_id: str, request: Request):
         return {"models": model_names}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+# ── 能力检测 ─────────────────────────────────────────────
+
+
+class TestCapabilityBody(BaseModel):
+    model_name: str
+    capability: str | None = None  # None = 测试所有能力
+
+
+@router.post("/providers/{provider_id}/test-capability")
+async def test_single_capability(provider_id: str, body: TestCapabilityBody, request: Request):
+    """测试指定模型的单个或所有能力，并保存结果。"""
+    mgr = _get_manager(request)
+    config = mgr.get_config(provider_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    if body.model_name not in config.models:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model '{body.model_name}' is not in provider's model list",
+        )
+
+    testers = _get_testers()
+    if body.capability:
+        testers = [t for t in testers if t.capability_name == body.capability]
+        if not testers:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown capability '{body.capability}'",
+            )
+
+    results = await test_model_capabilities(config, body.model_name, testers)
+
+    # 保存到 model_capabilities
+    if body.capability:
+        model_caps = config.model_capabilities.get(body.model_name, {})
+        model_caps[body.capability] = results[body.capability]
+        if body.model_name not in config.model_capabilities:
+            config.model_capabilities[body.model_name] = {}
+        config.model_capabilities[body.model_name].update(model_caps)
+    else:
+        config.model_capabilities[body.model_name] = results
+
+    mgr.save_config(config)
+    return {"capabilities": results}
+
+
+@router.post("/providers/{provider_id}/test-all-capabilities")
+async def test_all_capabilities(provider_id: str, body: TestCapabilityBody, request: Request):
+    """测试指定模型的所有能力。兼容旧端点路径。"""
+    return await test_single_capability(provider_id, body, request)
