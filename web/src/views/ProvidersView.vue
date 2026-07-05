@@ -38,8 +38,7 @@
             <div class="card-models-title">模型（{{ p.models.length }}）</div>
             <div class="card-models-tags">
               <span v-for="m in p.models" :key="m" class="model-tag" :class="{ 'default-model-tag': m === p.default_model }">
-                {{ m }}<span v-if="m === p.default_model" class="default-model-star" title="默认模型">⭐</span>
-                <Icon v-if="p.model_vision?.[m] === true" name="image-cog" :size="12" class="vision-dot" title="支持视觉" />
+                {{ m }}<span v-if="m === p.default_model" class="default-model-star" title="默认模型">⭐</span><span v-if="p.model_context_windows?.[m]" class="ctx-badge">{{ (p.model_context_windows[m] / 1000).toLocaleString() }}K</span><Icon v-if="p.model_vision?.[m] === true" name="image-cog" :size="12" class="vision-dot" title="支持视觉" />
               </span>
               <span v-if="p.models.length === 0" class="model-tag empty">未配置</span>
             </div>
@@ -130,7 +129,7 @@
           <div v-for="m in discoveredModels" :key="m" class="model-item" :class="{ 'default-model-item': form.defaultModel === m }">
             <label class="model-checkbox-label">
               <input type="checkbox" :value="m" :checked="selectedModels.includes(m)" @change="toggleModel(m)" />
-              <span class="model-name-text">{{ m }}</span>
+              <span class="model-name-text">{{ m }}<span v-if="modelContextWindows[m]" class="ctx-badge">{{ (modelContextWindows[m] / 1000).toLocaleString() }}K</span></span>
               <span v-if="editingModelVision[m] === true" class="vision-badge">视觉</span>
               <span v-else-if="editingModelVision[m] === false" class="vision-badge no-vision">无视觉</span>
             </label>
@@ -239,6 +238,9 @@ const selectedModels = ref<string[]>([])
 // ── 视觉能力 ──
 const editingModelVision = ref<Record<string, boolean>>({})
 
+// ── 上下文窗口（拉取后缓存） ──
+const modelContextWindows = ref<Record<string, number>>({})
+
 async function handleDiscover() {
   discovering.value = true
   formError.value = ''
@@ -248,9 +250,13 @@ async function handleDiscover() {
       const res = await api.discoverModelsForExisting(editingId.value)
       discoveredModels.value = res.models
       selectedModels.value = [...res.models]
+      modelContextWindows.value = res.model_context_windows ?? {}
       if (res.default_model_warning) {
         defaultModelWarning.value = res.default_model_warning
         form.value.defaultModel = null
+      }
+      if (res.model_context_windows && discoveredModels.value.length) {
+        form.value.context_window = res.model_context_windows[discoveredModels.value[0]] ?? form.value.context_window
       }
     } else {
       const res = await api.discoverModels({
@@ -259,6 +265,10 @@ async function handleDiscover() {
       })
       discoveredModels.value = res.models
       selectedModels.value = [...res.models]
+      modelContextWindows.value = res.model_context_windows ?? {}
+      if (res.model_context_windows && discoveredModels.value.length) {
+        form.value.context_window = res.model_context_windows[discoveredModels.value[0]] ?? form.value.context_window
+      }
     }
   } catch (e: any) {
     formError.value = e.message
@@ -303,6 +313,7 @@ function startAdd() {
   selectedModels.value = []
   editingModelVision.value = {}
   defaultModelWarning.value = ''
+  modelContextWindows.value = {}
   formError.value = ''
   testOk.value = false
 }
@@ -324,6 +335,7 @@ function startEdit(p: ProviderConfig) {
   selectedModels.value = [...p.models]
   editingModelVision.value = p.model_vision ?? {}
   defaultModelWarning.value = ''
+  modelContextWindows.value = p.model_context_windows ?? {}
   formError.value = ''
   testOk.value = false
 }
