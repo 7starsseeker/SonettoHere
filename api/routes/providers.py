@@ -236,7 +236,17 @@ async def discover_models(body: TestConnectionBody):
         client = AsyncOpenAI(api_key=body.api_key, base_url=body.base_url)
         models = await client.models.list()
         model_names = sorted(m.id for m in models.data)
-        return {"models": model_names}
+
+        from api.data.model_context_windows import get_context_window
+        model_context_windows: dict[str, int] = {}
+        for m in models.data:
+            ctx = getattr(m, "max_context_length", None) or getattr(m, "context_window", None)
+            if ctx:
+                model_context_windows[m.id] = int(ctx)
+            else:
+                model_context_windows[m.id] = get_context_window(m.id)
+
+        return {"models": model_names, "model_context_windows": model_context_windows}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -258,6 +268,17 @@ async def discover_models_for_existing(provider_id: str, request: Request):
         client = AsyncOpenAI(api_key=config.api_key, base_url=config.base_url)
         models = await client.models.list()
         model_names = sorted(m.id for m in models.data)
+
+        # 从 API 响应拉取模型上下文窗口
+        from api.data.model_context_windows import get_context_window
+        model_context_windows: dict[str, int] = {}
+        for m in models.data:
+            ctx = getattr(m, "max_context_length", None) or getattr(m, "context_window", None)
+            if ctx:
+                model_context_windows[m.id] = int(ctx)
+            else:
+                model_context_windows[m.id] = get_context_window(m.id)
+        config.model_context_windows = model_context_windows
 
         # 默认模型联动：检查 default_model 是否还在新列表中
         warning = None

@@ -582,6 +582,15 @@ onMounted(loadProviders)
   background: #f3f4f6;
   color: #9ca3af;
 }
+.ctx-badge {
+  font-size: 10px;
+  margin-left: 3px;
+  padding: 0 4px;
+  background: #e0e7ff;
+  color: #3730a3;
+  border-radius: 3px;
+  font-family: 'SF Mono', 'Consolas', monospace;
+}
 
 .card-context-window {
   font-size: 12px;
