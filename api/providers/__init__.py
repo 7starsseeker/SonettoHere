@@ -27,7 +27,7 @@ class ProviderConfig:
         d = asdict(self)
         if not d.get("model_vision"):
             del d["model_vision"]
-        if not d.get("is_default_provider"):
+        if d.get("is_default_provider") is None:
             d.pop("is_default_provider", None)
         if d.get("default_model") is None:
             d.pop("default_model", None)
