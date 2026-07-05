@@ -13,7 +13,7 @@
 
 # ── 清单版本 ─────────────────────────────────────────────────────────────────
 # version=0 表示初始版本，之后每次数据结构（文件路径、字段）变更时递增。
-version: 0
+version: 1
 
 # ── 元数据 ───────────────────────────────────────────────────────────────────
 metadata:
@@ -38,7 +38,7 @@ paths:
     gitignored: true
 
   - path: "config/providers.yaml"
-    description: "LLM 提供商配置（base_url / api_key / model / context_window）"
+    description: "LLM 提供商配置（base_url / api_key / model / context_window / is_default_provider / default_model）"
     since_version: 0
     created_by: "setup.py Step 5 / Web UI /providers 页面"
     source_template: null
