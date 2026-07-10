@@ -19,17 +19,17 @@ export interface ThinkingEndEvent {
 
 export interface ToolStartEvent {
   type: 'tool_start'
-  payload: { tool_name: string; input: string }
+  payload: { call_id: string; tool_name: string; input: string }
 }
 
 export interface ToolEndEvent {
   type: 'tool_end'
-  payload: { tool_name: string; output: string; elapsed: number; tool_data?: Record<string, unknown> }
+  payload: { call_id: string; tool_name: string; output: string; elapsed: number; tool_data?: Record<string, unknown> }
 }
 
 export interface ToolErrorEvent {
   type: 'tool_error'
-  payload: { tool_name: string; error: string }
+  payload: { call_id: string; tool_name: string; error: string }
 }
 
 export interface AnswerEvent {
@@ -220,6 +220,7 @@ export interface ToolCall {
   output: string | null
   elapsed: number | null
   status: 'running' | 'done' | 'error'
+  callId?: string
   toolData?: Record<string, unknown>
   /** ask_user 交互工具的额外数据 */
   interaction?: AskUserInteraction

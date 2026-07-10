@@ -87,6 +87,7 @@ class WebSocketCallback(BaseCallbackHandler):
             {
                 "type": "tool_start",
                 "payload": {
+                    "call_id": run_id,
                     "tool_name": tool_name,
                     "input": input_str[:500] if len(input_str) > 500 else input_str,
                 },
@@ -110,6 +111,7 @@ class WebSocketCallback(BaseCallbackHandler):
                     {
                         "type": "tool_error",
                         "payload": {
+                            "call_id": run_id,
                             "tool_name": tool_name,
                             "error": error_msg,
                         },
@@ -130,6 +132,7 @@ class WebSocketCallback(BaseCallbackHandler):
             {
                 "type": "tool_end",
                 "payload": {
+                    "call_id": run_id,
                     "tool_name": tool_name,
                     "output": out_str,
                     "elapsed": round(elapsed, 2),
@@ -147,6 +150,7 @@ class WebSocketCallback(BaseCallbackHandler):
             {
                 "type": "tool_error",
                 "payload": {
+                    "call_id": run_id,
                     "tool_name": tool_name,
                     "error": str(error),
                 },
