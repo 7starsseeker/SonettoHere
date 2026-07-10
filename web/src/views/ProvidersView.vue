@@ -338,7 +338,7 @@ async function handleSave() {
   try {
     const body: any = {
       id: form.value.id || form.value.label.toLowerCase().replace(/\s+/g, '-'),
-      provider_type: 'openai',
+      provider_type: form.value.provider_type,
       label: form.value.label,
       api_key: form.value.api_key,
       base_url: form.value.base_url,
