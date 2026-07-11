@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from api.const_session_store import flatten_content
 from api.context_usage import estimate_context_usage
 from api.dependencies import get_llm
+from api.providers import FALLBACK_CTX
 from agent.prompts import get_system_prompt_parts
 
 router = APIRouter()
@@ -93,12 +94,12 @@ async def get_context_usage(session_id: str, request: Request):
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     mgr = getattr(request.app.state, "provider_manager", None)
-    max_tokens = 256_000
+    max_tokens = FALLBACK_CTX
     model_name = ""
     if mgr is not None and mgr.count > 0:
         for provider in mgr.iter_enabled():
-            max_tokens = provider.config.context_window
             model_name = provider.default_model
+            max_tokens = provider.config.model_context_windows.get(model_name, FALLBACK_CTX) if model_name else FALLBACK_CTX
             break
 
     system_prompt = request.app.state.system_prompt

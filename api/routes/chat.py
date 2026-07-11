@@ -20,24 +20,28 @@ from api.session_manager import SessionState
 from tools.base import format_error
 from tools.network.tool_image_understand import load_image_bytes, get_mime_type
 
+from api.providers import FALLBACK_CTX
+
 router = APIRouter()
 
 
 def _get_provider_context(app_state) -> tuple[int, str]:
-    """从 ProviderManager 获取默认 context_window 和 model_name。
+    """从 ProviderManager 获取默认 max_tokens 和 model_name。
 
-    优先取 is_default_provider=True 的供应商。
+    优先取 is_default_provider=True 的供应商，查询其 default_model 的上下文窗口。
     """
     mgr = getattr(app_state, "provider_manager", None)
     if mgr is not None and mgr.count > 0:
-        # 优先取默认供应商
         for provider in mgr.iter_enabled():
             if provider.config.is_default_provider:
-                return provider.config.context_window, provider.default_model
-        # 退化到第一个 enabled provider
+                model = provider.default_model
+                ctx = provider.config.model_context_windows.get(model, FALLBACK_CTX)
+                return ctx, model
         for provider in mgr.iter_enabled():
-            return provider.config.context_window, provider.default_model
-    return 256_000, ""
+            model = provider.default_model
+            ctx = provider.config.model_context_windows.get(model, FALLBACK_CTX)
+            return ctx, model
+    return FALLBACK_CTX, ""
 
 
 async def _get_session_messages(session) -> list[dict]:
@@ -293,7 +297,7 @@ async def _run_agent_turn(
             provider = app_state.provider_manager.get(provider_id)
             llm = provider.create_llm(model_name, temperature=0.7, streaming=True)
             current_model_name = model_name
-            current_max_tokens = provider.config.context_window
+            current_max_tokens = provider.config.model_context_windows.get(model_name, FALLBACK_CTX)
         except KeyError:
             llm = app_state.llm
             current_model_name = None
