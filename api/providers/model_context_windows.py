@@ -9,6 +9,8 @@ import json
 import urllib.request
 import urllib.error
 
+from api.providers import ProviderConfig
+
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/models"
 
 _OPENROUTER_CACHE: dict[str, int] | None = None
@@ -96,3 +98,25 @@ def lookup_context_window(model_name: str, or_data: dict[str, int] | None = None
 def preload_openrouter() -> None:
     """启动时主动拉取 OpenRouter 数据（惰性加载的预热）。"""
     ensure_openrouter_cache()
+
+
+def fill_missing_context_windows(config: ProviderConfig) -> int:
+    """为 config.models 中缺失上下文窗口值的模型从 OpenRouter 补充。
+
+    仅补充 config.model_context_windows 中不存在的模型，已有值不受影响。
+
+    Returns:
+        本次补充的模型数量。
+    """
+    or_data = ensure_openrouter_cache()
+    if not or_data:
+        return 0
+
+    filled = 0
+    for model in config.models:
+        if model not in config.model_context_windows:
+            ctx = lookup_context_window(model, or_data)
+            if ctx:
+                config.model_context_windows[model] = ctx
+                filled += 1
+    return filled
