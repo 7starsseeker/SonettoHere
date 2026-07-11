@@ -107,17 +107,11 @@ async def lifespan(app: FastAPI):
     print(f"[provider] loaded {provider_manager.count} provider(s)")
 
     # 预加载 OpenRouter 上下文窗口数据，为已配置的模型补充信息
-    from api.providers.model_context_windows import lookup_context_window, ensure_openrouter_cache
-    or_data = ensure_openrouter_cache()
+    from api.providers.model_context_windows import fill_missing_context_windows, preload_openrouter
+    preload_openrouter()
     total_filled = 0
     for p in provider_manager.list_configs():
-        filled = 0
-        for model in p.models:
-            if model not in p.model_context_windows:
-                ctx = lookup_context_window(model, or_data)
-                if ctx:
-                    p.model_context_windows[model] = ctx
-                    filled += 1
+        filled = fill_missing_context_windows(p)
         if filled:
             provider_manager.save_config(p)
             total_filled += filled

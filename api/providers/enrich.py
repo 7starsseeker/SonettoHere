@@ -5,7 +5,7 @@
 """
 
 from api.providers import ProviderConfig
-from api.providers.model_context_windows import ensure_openrouter_cache, lookup_context_window
+from api.providers.model_context_windows import fill_missing_context_windows
 from api.providers.vision import detect_vision_if_available
 
 
@@ -23,12 +23,6 @@ async def enrich_provider_config(
         config.model_vision = await detect_vision_if_available(config)
 
     async def _fill_context_windows():
-        or_data = ensure_openrouter_cache()
-        if or_data:
-            for model in config.models:
-                if model not in config.model_context_windows:
-                    ctx = lookup_context_window(model, or_data)
-                    if ctx:
-                        config.model_context_windows[model] = ctx
+        fill_missing_context_windows(config)
 
     await asyncio.gather(_detect_vision(), _fill_context_windows())
