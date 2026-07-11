@@ -14,7 +14,6 @@ from api.providers import ProviderConfig
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/models"
 
 _OPENROUTER_CACHE: dict[str, int] | None = None
-_OPENROUTER_FETCHED = False
 
 
 def fetch_openrouter_models() -> dict[str, int]:
@@ -44,10 +43,9 @@ def fetch_openrouter_models() -> dict[str, int]:
 
 
 def ensure_openrouter_cache() -> dict[str, int]:
-    """惰性加载 OpenRouter 缓存（全局仅拉取一次）。"""
-    global _OPENROUTER_CACHE, _OPENROUTER_FETCHED
-    if not _OPENROUTER_FETCHED:
-        _OPENROUTER_FETCHED = True
+    """惰性加载 OpenRouter 缓存（成功时全局仅拉取一次）。"""
+    global _OPENROUTER_CACHE
+    if _OPENROUTER_CACHE is None:
         data = fetch_openrouter_models()
         if data:
             _OPENROUTER_CACHE = data

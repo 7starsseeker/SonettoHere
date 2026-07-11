@@ -90,7 +90,7 @@ def get_provider(provider_id: str, request: Request):
 
 @router.post("/providers")
 async def create_provider(body: ProviderCreateBody, request: Request):
-    """新增提供商，并自动检测每个模型的视觉能力。"""
+    """新增提供商，并自动对模型进行元数据测定与填充。"""
     mgr = _get_manager(request)
     if mgr.get_config(body.id) is not None:
         raise HTTPException(
@@ -120,7 +120,7 @@ async def create_provider(body: ProviderCreateBody, request: Request):
 
 @router.put("/providers/{provider_id}")
 async def update_provider(provider_id: str, body: ProviderUpdateBody, request: Request):
-    """更新提供商配置（部分字段），并重新检测视觉能力。"""
+    """更新提供商配置（部分字段），并重新对模型进行元数据测定与填充。"""
     mgr = _get_manager(request)
     config = mgr.get_config(provider_id)
     if config is None:
