@@ -21,7 +21,11 @@ class ProviderConfigStore:
             return []
         with open(self.path, encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
-        return [ProviderConfig(**item) for item in raw.get("providers", [])]
+        configs = []
+        for item in raw.get("providers", []):
+            item.pop("context_window", None)  # 旧字段，已移除
+            configs.append(ProviderConfig(**item))
+        return configs
 
     def get(self, provider_id: str) -> ProviderConfig | None:
         """按 id 查找配置。"""
@@ -79,7 +83,7 @@ class ProviderConfigStore:
             base_url=base_url,
             models=[model_name],
             enabled=True,
-            context_window=int(context_window_str),
+            model_context_windows={model_name: int(context_window_str)},
         )
         self.save(config)
         return config
