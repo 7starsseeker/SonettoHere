@@ -1,28 +1,29 @@
 """模型元数据并发检测入口。
 
-新增/更新提供商时，并发执行视觉能力检测和上下文窗口填充，
-确保 model_vision 和 model_context_windows 在创建时同步就绪。
+每新增/更新提供商时，并发执行已注册的所有 enrichment 函数。
+通过 register() 扩展，核心代码无需修改（开放/封闭原则）。
 """
+
+import asyncio
+from collections.abc import Callable
 
 from api.providers import ProviderConfig
 from api.providers.model_context_windows import fill_missing_context_windows
 from api.providers.vision import detect_vision_if_available
 
+_registry: list[Callable[[ProviderConfig], object]] = []
 
-async def enrich_provider_config(
-    config: ProviderConfig,
-) -> None:
-    """并发检测视觉能力和填充上下文窗口，直接原地修改 config。
 
-    Args:
-        config: 待补充元数据的 ProviderConfig（原地修改）。
-    """
-    import asyncio
+def register(func: Callable[[ProviderConfig], object]) -> None:
+    """注册一个 enrichment 函数，入参为 ProviderConfig，原地修改。"""
+    _registry.append(func)
 
-    async def _detect_vision():
-        await detect_vision_if_available(config)
 
-    async def _fill_context_windows():
-        fill_missing_context_windows(config)
+# 注册内置 enrichment
+register(detect_vision_if_available)
+register(fill_missing_context_windows)
 
-    await asyncio.gather(_detect_vision(), _fill_context_windows())
+
+async def enrich_provider_config(config: ProviderConfig) -> None:
+    """并发执行所有已注册的 enrichment 函数。"""
+    await asyncio.gather(*(f(config) for f in _registry))

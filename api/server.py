@@ -111,7 +111,7 @@ async def lifespan(app: FastAPI):
     preload_openrouter()
     total_filled = 0
     for p in provider_manager.list_configs():
-        filled = fill_missing_context_windows(p)
+        filled = await fill_missing_context_windows(p)
         if filled:
             provider_manager.save_config(p)
             total_filled += filled

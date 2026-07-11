@@ -100,7 +100,7 @@ def preload_openrouter() -> None:
     ensure_openrouter_cache()
 
 
-def fill_missing_context_windows(config: ProviderConfig) -> int:
+async def fill_missing_context_windows(config: ProviderConfig) -> int:
     """为 config.models 中缺失上下文窗口值的模型从 OpenRouter 补充。
 
     仅补充 config.model_context_windows 中不存在的模型，已有值不受影响。
