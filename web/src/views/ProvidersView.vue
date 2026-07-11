@@ -95,8 +95,9 @@
       </div>
 
       <div class="form-section">
-        <label class="form-label">Context Window (tokens)</label>
-        <input v-model.number="form.context_window" class="input mono" type="number" placeholder="256000" />
+        <label class="form-label">Context Window</label>
+        <input v-model="contextWindowText" class="input mono" type="text" placeholder="256000 / 128K / 1M" @input="parseContextWindow" />
+        <span class="form-hint">{{ form.context_window.toLocaleString() }} tokens</span>
       </div>
 
       <!-- 默认供应商 -->
@@ -162,7 +163,7 @@
 <script setup lang="ts">
 import { api } from '@/api'
 import type { ProviderConfig, TestConnectionResponse } from '@/types'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import Icon from '@/components/Icon.vue'
 
 // ── 预设提供商列表 ──
@@ -188,6 +189,24 @@ const isEditing = computed(() => mode.value === 'edit')
 const editingId = ref('')
 const defaultModelWarning = ref('')
 
+// 上下文窗口输入：支持 K/M 缩写自动转换
+const contextWindowText = ref('256000')
+function parseContextWindow() {
+  const raw = contextWindowText.value.trim().toUpperCase()
+  const m = raw.match(/^(\d+(?:\.\d+)?)\s*([KM]?)$/)
+  if (!m) return
+  const num = parseFloat(m[1])
+  const unit = m[2]
+  if (unit === 'K') form.value.context_window = Math.round(num * 1000)
+  else if (unit === 'M') form.value.context_window = Math.round(num * 1_000_000)
+  else form.value.context_window = Math.round(num)
+  contextWindowText.value = String(form.value.context_window)
+}
+// 外部更新 form.context_window 时同步显示文本
+watch(() => form.value.context_window, (v) => {
+  contextWindowText.value = String(v)
+})
+
 function presetBaseUrl(id: string) {
   return presets.find(p => p.id === id)?.base_url || ''
 }
@@ -199,7 +218,6 @@ function onPresetChange(newType: string) {
   }
 }
 // watch provider_type
-import { watch } from 'vue'
 watch(() => form.value.provider_type, onPresetChange)
 
 // ── 测试连接 ──
@@ -256,7 +274,11 @@ async function handleDiscover() {
         form.value.defaultModel = null
       }
       if (res.model_context_windows && discoveredModels.value.length) {
-        form.value.context_window = res.model_context_windows[discoveredModels.value[0]] ?? form.value.context_window
+        const ctx = res.model_context_windows[discoveredModels.value[0]]
+        if (ctx) {
+          form.value.context_window = ctx
+          contextWindowText.value = String(ctx)
+        }
       }
     } else {
       const res = await api.discoverModels({
@@ -267,7 +289,11 @@ async function handleDiscover() {
       selectedModels.value = [...res.models]
       modelContextWindows.value = res.model_context_windows ?? {}
       if (res.model_context_windows && discoveredModels.value.length) {
-        form.value.context_window = res.model_context_windows[discoveredModels.value[0]] ?? form.value.context_window
+        const ctx = res.model_context_windows[discoveredModels.value[0]]
+        if (ctx) {
+          form.value.context_window = ctx
+          contextWindowText.value = String(ctx)
+        }
       }
     }
   } catch (e: any) {
@@ -675,6 +701,7 @@ onMounted(loadProviders)
 .input:focus { border-color: var(--accent); }
 .input.mono { font-family: 'SF Mono', 'Consolas', monospace; font-size: 13px; }
 select.input { cursor: pointer; }
+.form-hint { font-size: 12px; color: #9ca3af; margin-top: 2px; }
 
 .form-row {
   display: flex;

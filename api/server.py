@@ -106,20 +106,23 @@ async def lifespan(app: FastAPI):
     app.state.provider_manager = provider_manager
     print(f"[provider] loaded {provider_manager.count} provider(s)")
 
-    from api.data.model_context_windows import get_context_window, preload_openrouter
-    preload_openrouter()
+    # 预加载 OpenRouter 上下文窗口数据，为已配置的模型补充信息
+    from api.data.model_context_windows import lookup_context_window, ensure_openrouter_cache
+    or_data = ensure_openrouter_cache()
     total_filled = 0
     for p in provider_manager.list_configs():
         filled = 0
         for model in p.models:
             if model not in p.model_context_windows:
-                p.model_context_windows[model] = get_context_window(model)
-                filled += 1
+                ctx = lookup_context_window(model, or_data)
+                if ctx:
+                    p.model_context_windows[model] = ctx
+                    filled += 1
         if filled:
             provider_manager.save_config(p)
             total_filled += filled
     if total_filled:
-        print(f"[provider] auto-filled context_window for {total_filled} model(s)")
+        print(f"[context-window] auto-filled {total_filled} model(s) from OpenRouter")
 
     # 2. 其他共享资源（LLM 统一从 ProviderManager 获取）
     try:
