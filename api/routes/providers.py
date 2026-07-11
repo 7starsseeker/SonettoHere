@@ -224,11 +224,10 @@ async def discover_models(body: TestConnectionBody):
         models = await client.models.list()
         model_names = sorted(m.id for m in models.data)
 
-        from api.providers.model_context_windows import lookup_context_window, ensure_openrouter_cache
-        or_data = ensure_openrouter_cache()
+        from api.providers.model_context_windows import lookup_context_window
         model_context_windows: dict[str, int] = {}
         for m in models.data:
-            ctx = lookup_context_window(m.id, or_data)
+            ctx = lookup_context_window(m.id)
             if ctx:
                 model_context_windows[m.id] = ctx
 
@@ -244,7 +243,7 @@ async def discover_models_for_existing(provider_id: str, request: Request):
     重新拉取后，如果原来的 default_model 已不存在，自动置 None 并返回警告。
     """
     from openai import AsyncOpenAI
-    from api.providers.model_context_windows import lookup_context_window, ensure_openrouter_cache
+    from api.providers.model_context_windows import lookup_context_window
 
     mgr = _get_manager(request)
     config = mgr.get_config(provider_id)
@@ -257,10 +256,9 @@ async def discover_models_for_existing(provider_id: str, request: Request):
         model_names = sorted(m.id for m in models.data)
 
         # 从 OpenRouter 查找模型上下文窗口
-        or_data = ensure_openrouter_cache()
         model_context_windows: dict[str, int] = {}
         for m in models.data:
-            ctx = lookup_context_window(m.id, or_data)
+            ctx = lookup_context_window(m.id)
             if ctx:
                 model_context_windows[m.id] = ctx
         config.model_context_windows = model_context_windows
