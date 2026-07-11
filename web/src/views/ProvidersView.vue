@@ -152,7 +152,7 @@
 <script setup lang="ts">
 import { api } from '@/api'
 import type { ProviderConfig, TestConnectionResponse } from '@/types'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import Icon from '@/components/Icon.vue'
 
 // ── 预设提供商列表 ──
