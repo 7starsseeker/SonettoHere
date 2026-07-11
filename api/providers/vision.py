@@ -80,8 +80,7 @@ async def detect_vision_capabilities(config: ProviderConfig) -> dict[str, bool]:
     return vision
 
 
-async def detect_vision_if_available(config: ProviderConfig) -> dict[str, bool]:
-    """如果测试图片存在且配置了模型，检测视觉能力，否则返回空字典。"""
-    if not config.models or not IMAGE_PATH.exists():
-        return {}
-    return await detect_vision_capabilities(config)
+async def detect_vision_if_available(config: ProviderConfig) -> None:
+    """如果测试图片存在且配置了模型，原地填充 model_vision。"""
+    if config.models and IMAGE_PATH.exists():
+        config.model_vision = await detect_vision_capabilities(config)

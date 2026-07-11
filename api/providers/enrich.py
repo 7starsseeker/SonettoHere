@@ -20,7 +20,7 @@ async def enrich_provider_config(
     import asyncio
 
     async def _detect_vision():
-        config.model_vision = await detect_vision_if_available(config)
+        await detect_vision_if_available(config)
 
     async def _fill_context_windows():
         fill_missing_context_windows(config)
