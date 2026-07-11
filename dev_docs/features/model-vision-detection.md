@@ -127,7 +127,7 @@ async def create_provider(body: ProviderCreateBody, request: Request):
     ...
     mgr.save_config(config)                              # 1. 写入基础配置
     if config.models and IMAGE_PATH.exists():
-        vision = await detect_vision_capabilities(config, IMAGE_PATH)
+        vision = await detect_vision_capabilities(config)
         config.model_vision = vision
         mgr.save_config(config)                          # 2. 回写 vision 结果
     return config.to_dict()
