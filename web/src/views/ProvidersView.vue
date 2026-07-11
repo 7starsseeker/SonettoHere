@@ -44,11 +44,6 @@
             </div>
           </div>
 
-          <!-- 上下文窗口 -->
-          <div class="card-context-window">
-            上下文窗口: {{ (p.context_window ?? 256000).toLocaleString() }} tokens
-          </div>
-
           <!-- 测试结果 -->
           <Transition name="fade">
             <div v-if="testResult?.[p.id]" class="test-result" :class="testResult[p.id].status">
@@ -92,12 +87,6 @@
       <div class="form-section">
         <label class="form-label">Base URL</label>
         <input v-model="form.base_url" class="input mono" placeholder="https://api.deepseek.com" />
-      </div>
-
-      <div class="form-section">
-        <label class="form-label">Context Window</label>
-        <input v-model="contextWindowText" class="input mono" type="text" placeholder="256000 / 128K / 1M" @input="parseContextWindow" />
-        <span class="form-hint">{{ form.context_window.toLocaleString() }} tokens</span>
       </div>
 
       <!-- 默认供应商 -->
@@ -163,7 +152,7 @@
 <script setup lang="ts">
 import { api } from '@/api'
 import type { ProviderConfig, TestConnectionResponse } from '@/types'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import Icon from '@/components/Icon.vue'
 
 // ── 预设提供商列表 ──
@@ -184,28 +173,10 @@ const providers = ref<ProviderConfig[]>([])
 const loading = ref(false)
 
 // ── 表单 ──
-const form = ref({ id: '', provider_type: 'deepseek', label: '', api_key: '', base_url: '', context_window: 256000, isDefaultProvider: false, defaultModel: null as string | null })
+const form = ref({ id: '', provider_type: 'deepseek', label: '', api_key: '', base_url: '', isDefaultProvider: false, defaultModel: null as string | null })
 const isEditing = computed(() => mode.value === 'edit')
 const editingId = ref('')
 const defaultModelWarning = ref('')
-
-// 上下文窗口输入：支持 K/M 缩写自动转换
-const contextWindowText = ref('256000')
-function parseContextWindow() {
-  const raw = contextWindowText.value.trim().toUpperCase()
-  const m = raw.match(/^(\d+(?:\.\d+)?)\s*([KM]?)$/)
-  if (!m) return
-  const num = parseFloat(m[1])
-  const unit = m[2]
-  if (unit === 'K') form.value.context_window = Math.round(num * 1000)
-  else if (unit === 'M') form.value.context_window = Math.round(num * 1_000_000)
-  else form.value.context_window = Math.round(num)
-  contextWindowText.value = String(form.value.context_window)
-}
-// 外部更新 form.context_window 时同步显示文本
-watch(() => form.value.context_window, (v) => {
-  contextWindowText.value = String(v)
-})
 
 function presetBaseUrl(id: string) {
   return presets.find(p => p.id === id)?.base_url || ''
@@ -273,13 +244,6 @@ async function handleDiscover() {
         defaultModelWarning.value = res.default_model_warning
         form.value.defaultModel = null
       }
-      if (res.model_context_windows && discoveredModels.value.length) {
-        const ctx = res.model_context_windows[discoveredModels.value[0]]
-        if (ctx) {
-          form.value.context_window = ctx
-          contextWindowText.value = String(ctx)
-        }
-      }
     } else {
       const res = await api.discoverModels({
         api_key: form.value.api_key,
@@ -288,13 +252,6 @@ async function handleDiscover() {
       discoveredModels.value = res.models
       selectedModels.value = [...res.models]
       modelContextWindows.value = res.model_context_windows ?? {}
-      if (res.model_context_windows && discoveredModels.value.length) {
-        const ctx = res.model_context_windows[discoveredModels.value[0]]
-        if (ctx) {
-          form.value.context_window = ctx
-          contextWindowText.value = String(ctx)
-        }
-      }
     }
   } catch (e: any) {
     formError.value = e.message
@@ -334,7 +291,7 @@ async function loadProviders() {
 
 function startAdd() {
   mode.value = 'add'
-  form.value = { id: '', provider_type: 'deepseek', label: '', api_key: '', base_url: presetBaseUrl('deepseek'), context_window: 256000, isDefaultProvider: false, defaultModel: null }
+  form.value = { id: '', provider_type: 'deepseek', label: '', api_key: '', base_url: presetBaseUrl('deepseek'), isDefaultProvider: false, defaultModel: null }
   discoveredModels.value = []
   selectedModels.value = []
   editingModelVision.value = {}
@@ -353,7 +310,6 @@ function startEdit(p: ProviderConfig) {
     label: p.label,
     api_key: '',
     base_url: p.base_url,
-    context_window: p.context_window ?? 256000,
     isDefaultProvider: p.is_default_provider ?? false,
     defaultModel: p.default_model ?? null,
   }
@@ -383,7 +339,6 @@ async function handleSave() {
       base_url: form.value.base_url,
       models: selectedModels.value,
       enabled: true,
-      context_window: form.value.context_window,
     }
     if (isEditing.value) {
       // PUT — only send changed fields
@@ -391,7 +346,6 @@ async function handleSave() {
         label: body.label,
         base_url: body.base_url,
         models: body.models,
-        context_window: body.context_window,
         is_default_provider: form.value.isDefaultProvider,
         default_model: form.value.defaultModel || null,
       }
@@ -628,11 +582,6 @@ onMounted(loadProviders)
   color: #3730a3;
   border-radius: 3px;
   font-family: 'SF Mono', 'Consolas', monospace;
-}
-
-.card-context-window {
-  font-size: 12px;
-  color: #9ca3af;
 }
 
 /* ── 测试结果 ── */

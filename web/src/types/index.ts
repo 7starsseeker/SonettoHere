@@ -388,7 +388,6 @@ export interface ProviderConfig {
   base_url: string
   models: string[]
   enabled: boolean
-  context_window?: number
   model_vision?: Record<string, boolean>
   is_default_provider?: boolean
   default_model?: string | null
