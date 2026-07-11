@@ -1,7 +1,5 @@
 """REST API — 提供商 CRUD 与连接测试。"""
 
-from pathlib import Path
-
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
@@ -10,11 +8,6 @@ from api.providers.enrich import enrich_provider_config
 from api.dependencies import get_llm
 
 router = APIRouter()
-
-# 视觉能力测试图片路径
-IMAGE_PATH = (
-    Path(__file__).resolve().parent.parent / "data" / "SonettoTest.png"
-)
 
 
 # ── Pydantic 请求/响应模型 ──────────────────────────────
@@ -116,7 +109,7 @@ async def create_provider(body: ProviderCreateBody, request: Request):
     )
 
     # 并发检测视觉能力和填充上下文窗口
-    await enrich_provider_config(config, IMAGE_PATH if IMAGE_PATH.exists() else None)
+    await enrich_provider_config(config)
 
     # 统一写入 YAML（含 model_vision + model_context_windows）
     mgr.save_config(config)
@@ -157,7 +150,7 @@ async def update_provider(provider_id: str, body: ProviderUpdateBody, request: R
         setattr(config, field, value)
 
     # 并发检测视觉能力和填充上下文窗口
-    await enrich_provider_config(config, IMAGE_PATH if IMAGE_PATH.exists() else None)
+    await enrich_provider_config(config)
 
     # 统一写入 YAML（含 model_vision + model_context_windows）
     mgr.save_config(config)
