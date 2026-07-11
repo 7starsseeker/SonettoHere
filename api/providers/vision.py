@@ -14,6 +14,8 @@ from langchain_core.messages import HumanMessage
 
 from api.providers import Provider, ProviderConfig
 
+IMAGE_PATH = Path(__file__).resolve().parent.parent / "data" / "SonettoTest.png"
+
 _PROMPT = "What text is shown in this image? Reply with only the text."
 
 
@@ -50,13 +52,11 @@ async def test_model_vision(
         return False
 
 
-async def detect_vision_capabilities(
-    config: ProviderConfig, image_path: Path
-) -> dict[str, bool]:
+async def detect_vision_capabilities(config: ProviderConfig) -> dict[str, bool]:
     """批量检测提供商下所有模型的视觉能力。
 
-    并发测试 config.models 中的每个模型，返回 model_name → bool 的映射。
-    测试失败的模型视为无视觉能力。
+    使用 IMAGE_PATH 测试图片，并发测试 config.models 中的每个模型，
+    返回 model_name → bool 的映射。测试失败的模型视为无视觉能力。
     """
     if not config.models:
         return {}
@@ -66,7 +66,7 @@ async def detect_vision_capabilities(
     provider = OpenAIProvider(config)
 
     tasks = [
-        test_model_vision(provider, model, image_path) for model in config.models
+        test_model_vision(provider, model, IMAGE_PATH) for model in config.models
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -78,3 +78,10 @@ async def detect_vision_capabilities(
             vision[model] = False
 
     return vision
+
+
+async def detect_vision_if_available(config: ProviderConfig) -> dict[str, bool]:
+    """如果测试图片存在且配置了模型，检测视觉能力，否则返回空字典。"""
+    if not config.models or not IMAGE_PATH.exists():
+        return {}
+    return await detect_vision_capabilities(config)
