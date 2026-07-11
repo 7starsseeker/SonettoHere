@@ -19,7 +19,7 @@
           <div class="card-header">
             <div class="card-title-row">
               <span class="card-label">{{ p.label }}</span>
-              <span v-if="p.is_default_provider" class="default-star" title="默认供应商">⭐</span>
+              <span v-if="p.is_default_provider" class="default-provider-badge">默认</span>
               <span class="card-type-badge">OPENAI</span>
             </div>
             <button
@@ -38,7 +38,7 @@
             <div class="card-models-title">模型（{{ p.models.length }}）</div>
             <div class="card-models-tags">
               <span v-for="m in p.models" :key="m" class="model-tag" :class="{ 'default-model-tag': m === p.default_model }">
-                {{ m }}<span v-if="m === p.default_model" class="default-model-star" title="默认模型">⭐</span><span v-if="p.model_context_windows?.[m]" class="ctx-badge">{{ Math.round(p.model_context_windows[m] / 1000).toLocaleString() }}K</span><Icon v-if="p.model_vision?.[m] === true" name="image-cog" :size="12" class="vision-dot" title="支持视觉" />
+                {{ m }}<span v-if="p.model_context_windows?.[m]" class="ctx-badge">{{ fmtCtx(p.model_context_windows[m]) }}</span><Icon v-if="p.model_vision?.[m] === true" name="image-cog" :size="12" class="vision-dot" title="支持视觉" />
               </span>
               <span v-if="p.models.length === 0" class="model-tag empty">未配置</span>
             </div>
@@ -119,7 +119,7 @@
           <div v-for="m in discoveredModels" :key="m" class="model-item" :class="{ 'default-model-item': form.defaultModel === m }">
             <label class="model-checkbox-label">
               <input type="checkbox" :value="m" :checked="selectedModels.includes(m)" @change="toggleModel(m)" />
-              <span class="model-name-text">{{ m }}<span v-if="modelContextWindows[m]" class="ctx-badge">{{ Math.round(modelContextWindows[m] / 1000).toLocaleString() }}K</span></span>
+              <span class="model-name-text">{{ m }}<span v-if="modelContextWindows[m]" class="ctx-badge">{{ fmtCtx(modelContextWindows[m]) }}</span></span>
               <span v-if="editingModelVision[m] === true" class="vision-badge">视觉</span>
               <span v-else-if="editingModelVision[m] === false" class="vision-badge no-vision">无视觉</span>
             </label>
@@ -190,6 +190,12 @@ function onPresetChange(newType: string) {
 }
 // watch provider_type
 watch(() => form.value.provider_type, onPresetChange)
+
+// ── 上下文窗口格式化 ──
+function fmtCtx(ctx: number): string {
+  if (ctx >= 1_000_000) return (ctx / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
+  return Math.round(ctx / 1000).toLocaleString() + 'K'
+}
 
 // ── 测试连接 ──
 const testing = ref(false)
@@ -578,8 +584,8 @@ onMounted(loadProviders)
   font-size: 10px;
   margin-left: 3px;
   padding: 0 4px;
-  background: #e0e7ff;
-  color: #3730a3;
+  background: #f3f4f6;
+  color: #6b7280;
   border-radius: 3px;
   font-family: 'SF Mono', 'Consolas', monospace;
 }
@@ -667,17 +673,18 @@ select.input { cursor: pointer; }
 .msg.warn { background: #fef3c7; color: #92400e; }
 
 /* ── 默认标记 ── */
-.default-star {
-  font-size: 14px;
+.default-provider-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #fef3c7;
+  color: #92400e;
+  font-weight: 600;
 }
 .default-model-tag {
   background: #fef3c7;
   color: #92400e;
 }
-.default-model-star {
-  margin-left: 2px;
-}
-
 /* ── 模型列表 Form ── */
 .model-list {
   display: flex;
