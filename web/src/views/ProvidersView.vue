@@ -38,7 +38,7 @@
             <div class="card-models-title">模型（{{ p.models.length }}）</div>
             <div class="card-models-tags">
               <span v-for="m in p.models" :key="m" class="model-tag" :class="{ 'default-model-tag': m === p.default_model }">
-                {{ m }}<span v-if="m === p.default_model" class="default-model-star" title="默认模型">⭐</span><span v-if="p.model_context_windows?.[m]" class="ctx-badge">{{ (p.model_context_windows[m] / 1000).toLocaleString() }}K</span><Icon v-if="p.model_vision?.[m] === true" name="image-cog" :size="12" class="vision-dot" title="支持视觉" />
+                {{ m }}<span v-if="m === p.default_model" class="default-model-star" title="默认模型">⭐</span><span v-if="p.model_context_windows?.[m]" class="ctx-badge">{{ Math.round(p.model_context_windows[m] / 1000).toLocaleString() }}K</span><Icon v-if="p.model_vision?.[m] === true" name="image-cog" :size="12" class="vision-dot" title="支持视觉" />
               </span>
               <span v-if="p.models.length === 0" class="model-tag empty">未配置</span>
             </div>
@@ -129,7 +129,7 @@
           <div v-for="m in discoveredModels" :key="m" class="model-item" :class="{ 'default-model-item': form.defaultModel === m }">
             <label class="model-checkbox-label">
               <input type="checkbox" :value="m" :checked="selectedModels.includes(m)" @change="toggleModel(m)" />
-              <span class="model-name-text">{{ m }}<span v-if="modelContextWindows[m]" class="ctx-badge">{{ (modelContextWindows[m] / 1000).toLocaleString() }}K</span></span>
+              <span class="model-name-text">{{ m }}<span v-if="modelContextWindows[m]" class="ctx-badge">{{ Math.round(modelContextWindows[m] / 1000).toLocaleString() }}K</span></span>
               <span v-if="editingModelVision[m] === true" class="vision-badge">视觉</span>
               <span v-else-if="editingModelVision[m] === false" class="vision-badge no-vision">无视觉</span>
             </label>

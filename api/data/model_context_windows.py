@@ -13,8 +13,10 @@ import json
 import urllib.request
 import urllib.error
 
-# 硬编码保底映射表（按匹配优先级从高到低排列）
-# key 是模型名的小写子串，value 是上下文窗口 token 数
+# 硬编码保底映射表
+# ⚠️ 子串匹配：key 是模型名的小写子串，遍历时先匹配到的返回。
+# 必须按特异性从高到低排列（精确子串在前，通用子串在后），
+# 例如 "gpt-4.1" 必须在 "gpt-4" 之前，否则 "gpt-4.1" 会被 "gpt-4" 先行匹配。
 MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     # ── OpenAI ──
     "gpt-4.1": 1_047_576,
@@ -69,16 +71,28 @@ _OPENROUTER_FETCHED = False
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/models"
 
 
+# YAML 覆盖缓存（文件修改时间 + 内容）
+_OVERRIDES_CACHE: dict[str, int] | None = None
+_OVERRIDES_MTIME: float | None = None
+
+
 def _load_overrides() -> dict[str, int]:
-    """从 YAML 配置文件加载用户自定义覆盖。"""
+    """从 YAML 配置文件加载用户自定义覆盖（带 mtime 缓存）。"""
     import yaml
+
     if not CONFIG_PATH.exists():
         return {}
     try:
+        current_mtime = CONFIG_PATH.stat().st_mtime
+        if _OVERRIDES_CACHE is not None and _OVERRIDES_MTIME == current_mtime:
+            return _OVERRIDES_CACHE
         with open(CONFIG_PATH, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         overrides = data.get("overrides", {})
-        return {k: int(v) for k, v in overrides.items()}
+        result = {k: int(v) for k, v in overrides.items()}
+        _OVERRIDES_CACHE = result
+        _OVERRIDES_MTIME = current_mtime
+        return result
     except Exception:
         return {}
 
@@ -119,6 +133,8 @@ def _ensure_openrouter_cache() -> dict[str, int]:
         if data:
             _OPENROUTER_CACHE = data
             print(f"[context-window] loaded {len(data)} model(s) from OpenRouter")
+        else:
+            print("[context-window] OpenRouter 未返回数据，将使用硬编码表 + 兜底值")
     return _OPENROUTER_CACHE or {}
 
 
