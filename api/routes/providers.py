@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from api.providers import ProviderConfig
-from api.providers.vision import detect_vision_capabilities
+from api.providers.enrich import enrich_provider_config
 from api.dependencies import get_llm
 
 router = APIRouter()
@@ -115,14 +115,11 @@ async def create_provider(body: ProviderCreateBody, request: Request):
         context_window=body.context_window,
     )
 
-    # 先写入基础配置（不含 vision）
-    mgr.save_config(config)
+    # 并发检测视觉能力和填充上下文窗口
+    await enrich_provider_config(config, IMAGE_PATH if IMAGE_PATH.exists() else None)
 
-    # 检测视觉能力并更新配置
-    if config.models and IMAGE_PATH.exists():
-        vision = await detect_vision_capabilities(config, IMAGE_PATH)
-        config.model_vision = vision
-        mgr.save_config(config)
+    # 统一写入 YAML（含 model_vision + model_context_windows）
+    mgr.save_config(config)
 
     await _refresh_app_llm(request)
     return config.to_dict()
@@ -159,14 +156,11 @@ async def update_provider(provider_id: str, body: ProviderUpdateBody, request: R
     for field, value in update_data.items():
         setattr(config, field, value)
 
-    # 先写入更新（不含 vision）
-    mgr.save_config(config)
+    # 并发检测视觉能力和填充上下文窗口
+    await enrich_provider_config(config, IMAGE_PATH if IMAGE_PATH.exists() else None)
 
-    # 检测视觉能力并更新配置
-    if config.models and IMAGE_PATH.exists():
-        vision = await detect_vision_capabilities(config, IMAGE_PATH)
-        config.model_vision = vision
-        mgr.save_config(config)
+    # 统一写入 YAML（含 model_vision + model_context_windows）
+    mgr.save_config(config)
 
     await _refresh_app_llm(request)
     return config.to_dict()
@@ -237,7 +231,7 @@ async def discover_models(body: TestConnectionBody):
         models = await client.models.list()
         model_names = sorted(m.id for m in models.data)
 
-        from api.data.model_context_windows import lookup_context_window, ensure_openrouter_cache
+        from api.providers.model_context_windows import lookup_context_window, ensure_openrouter_cache
         or_data = ensure_openrouter_cache()
         model_context_windows: dict[str, int] = {}
         for m in models.data:
@@ -257,7 +251,7 @@ async def discover_models_for_existing(provider_id: str, request: Request):
     重新拉取后，如果原来的 default_model 已不存在，自动置 None 并返回警告。
     """
     from openai import AsyncOpenAI
-    from api.data.model_context_windows import lookup_context_window, ensure_openrouter_cache
+    from api.providers.model_context_windows import lookup_context_window, ensure_openrouter_cache
 
     mgr = _get_manager(request)
     config = mgr.get_config(provider_id)

@@ -107,7 +107,7 @@ async def lifespan(app: FastAPI):
     print(f"[provider] loaded {provider_manager.count} provider(s)")
 
     # 预加载 OpenRouter 上下文窗口数据，为已配置的模型补充信息
-    from api.data.model_context_windows import lookup_context_window, ensure_openrouter_cache
+    from api.providers.model_context_windows import lookup_context_window, ensure_openrouter_cache
     or_data = ensure_openrouter_cache()
     total_filled = 0
     for p in provider_manager.list_configs():
