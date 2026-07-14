@@ -1,14 +1,18 @@
 """记忆叙事模块 — 每轮对话后将裸消息送给 LLM，增量更新 memory.yaml。"""
 
 import asyncio
+import json
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
-from langchain_core.messages import HumanMessage
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
+
+from api.ws_registry import WebSocketRegistry
 
 from memory.memory_callback import MemoryToolCallback
 from memory.memory_manager import MAX_DESC_LENGTH, MemoryManager
@@ -67,6 +71,11 @@ _UPDATE_PREFIX = """你是一位"记忆叙事师"。以下是当前记忆（每�
 
 COLD_START_SYSTEM = _COLD_PREFIX + _CORE_PRINCIPLES
 UPDATE_SYSTEM = _UPDATE_PREFIX + _CORE_PRINCIPLES
+
+FIND_RELATED_MEMORY = """
+你是一位记忆提取专家。接下来，你将会读取到一个带有索引的AI记忆库的全部文本，以及一个要求。
+你的任务是搜索找出所有关于这个要求的记忆条目，并以JSON数组形式返回它们的索引编号。
+"""
 
 
 # ── 模块级 MemoryManager 引用 ──────────────────────────────
@@ -267,12 +276,18 @@ class LongTermMemoryInterface:
         await ltm.stop_listening()        # 排空队列并停止
     """
 
-    def __init__(self, memory_path: str | Path) -> None:
+    def __init__(
+        self,
+        memory_path: str | Path,
+        llm: BaseChatModel | None = None,
+        ws_registry: WebSocketRegistry | None = None,
+    ) -> None:
         self._memory_path = Path(memory_path)
         self._mm = MemoryManager(yaml_file=str(self._memory_path))
+        self._llm = llm
+        self._ws_registry = ws_registry
         self._queue: asyncio.Queue | None = None
         self._consumer_task: asyncio.Task | None = None
-        self._ws_registry = None
 
     @property
     def is_listening(self) -> bool:
@@ -286,14 +301,47 @@ class LongTermMemoryInterface:
         mm = MemoryManager(yaml_file=str(self._memory_path))
         return _format_narrative(mm.show())
 
-    def start_listening(self, llm, ws_registry=None) -> None:
+    def get_related_memory_from(self, prompt: str) -> list[str]:
+        """根据查询要求从记忆库中找出语义相关的条目并返回其描述文本。"""
+        if self._llm is None:
+            return []
+        items = self._mm.show()
+        if not items:
+            return []
+
+        # 格式化为带列表序号（而非内部 hex ID）的编号列表，供 LLM 引用
+        lines = []
+        for i, item in enumerate(items):
+            lines.append(f"[{i}] ({item['theme']}) {item['description']}")
+        memory_text = "\n".join(lines)
+        user_prompt = f"## 记忆库\n{memory_text}\n\n## 查询要求\n{prompt}"
+
+        response = self._llm.invoke([
+            SystemMessage(content=FIND_RELATED_MEMORY.strip()),
+            HumanMessage(content=user_prompt),
+        ])
+
+        try:
+            indices = json.loads(response.content)
+            if isinstance(indices, list):
+                return [items[i]["description"] for i in indices if 0 <= i < len(items)]
+        except (json.JSONDecodeError, TypeError, IndexError):
+            pass
+        return []
+
+    def start_listening(
+        self, ws_registry: WebSocketRegistry | None = None
+    ) -> None:
         """创建 asyncio.Queue 并启动后台消费者协程。
 
         必须在运行中的事件循环内调用。
         """
-        self._ws_registry = ws_registry
+        if self._llm is None:
+            raise RuntimeError("LLM not set — cannot start listening")
+        if ws_registry is not None:
+            self._ws_registry = ws_registry
         self._queue = asyncio.Queue()
-        self._consumer_task = asyncio.create_task(self._consumer(llm))
+        self._consumer_task = asyncio.create_task(self._consumer())
 
     async def send_history(
         self,
@@ -323,7 +371,7 @@ class LongTermMemoryInterface:
             self._queue = None
             self._consumer_task = None
 
-    async def _consumer(self, llm) -> None:
+    async def _consumer(self) -> None:
         """后台消费者协程：从队列取消息，调用 CRUD Agent，写入 memory.yaml。"""
 
         while True:
@@ -378,7 +426,7 @@ class LongTermMemoryInterface:
                 date_prefix = (
                     f"\n\n--- 会话日期: {now.strftime('%Y-%m-%d')} {weekday_cn} ---"
                 )
-                user_prompt = user_prompt + date_prefix
+                user_prompt += date_prefix
 
                 crud_tools = [
                     create_memory,
@@ -388,10 +436,10 @@ class LongTermMemoryInterface:
                     merge_memories,
                 ]
 
-                agent = create_react_agent(
-                    model=llm,
+                agent = create_agent(
+                    model=self._llm,
                     tools=crud_tools,
-                    prompt=system_prompt,
+                    system_prompt=system_prompt,
                     checkpointer=MemorySaver(),
                 )
 
