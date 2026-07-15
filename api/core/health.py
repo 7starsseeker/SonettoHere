@@ -8,10 +8,10 @@ from typing import Literal
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from memory.memory_manager import MemoryManager
-from memory.narrative import MEMORY_PATH
+from api.memory.manager import MemoryManager
+from api.memory.narrative import MEMORY_PATH
 
-ANTHROPIC_SKILLS_DIR = Path(__file__).resolve().parent.parent / "anthropic_skills"
+ANTHROPIC_SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "anthropic_skills"
 
 
 class ComponentHealth(BaseModel):

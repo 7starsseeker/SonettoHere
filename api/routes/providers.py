@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from api.providers import ProviderConfig
 from api.providers.enrich import enrich_provider_config
-from api.dependencies import get_llm
+from api.providers.manager import ProviderManager
 
 router = APIRouter()
 
@@ -42,26 +42,27 @@ class TestConnectionBody(BaseModel):
 # ── HELPERS ─────────────────────────────────────────────
 
 
-def _get_manager(request: Request):
+def _get_manager(request: Request) -> ProviderManager:
     return request.app.state.provider_manager
 
 
 async def _refresh_app_llm(request: Request) -> None:
-    """从 provider_manager 刷新 app.state.llm，同步 LTM 消费者生命周期。"""
+    """从 provider_manager 刷新 app.state.default_llm，同步 LTM 消费者生命周期。"""
     mgr = _get_manager(request)
-    old_llm = getattr(request.app.state, "llm", None)
+    old_llm = getattr(request.app.state, "default_llm", None)
     ltm = getattr(request.app.state, "ltm", None)
 
-    try:
-        request.app.state.llm = get_llm(mgr)
+    request.app.state.default_llm = mgr.get_default_llm(
+        temperature=0.7, streaming=True
+    )
+    if request.app.state.default_llm is not None:
         if old_llm is None and ltm is not None and not ltm.is_listening:
-            ltm._llm = request.app.state.llm
+            ltm._llm = request.app.state.default_llm
             ltm.start_listening(
                 ws_registry=request.app.state.ws_registry,
             )
             print("[provider] LLM became available \u2014 LTM consumer started")
-    except RuntimeError:
-        request.app.state.llm = None
+    else:
         if ltm is not None and ltm.is_listening:
             await ltm.stop_listening()
             print("[provider] LLM became unavailable \u2014 LTM consumer stopped")

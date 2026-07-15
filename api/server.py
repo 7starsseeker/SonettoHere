@@ -8,13 +8,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import time
 
-from api.auth import load_or_create_token
-from api.const_session_store import (
+from api.core.auth import load_or_create_token
+from api.session.const_store import (
     deserialize_messages,
     load_all_const_sessions,
 )
-from api.dependencies import get_llm, get_system_prompt, get_tools
-from api.health import get_health_report
+from api.core.dependencies import get_system_prompt, get_tools
+from api.core.health import get_health_report
 from api.providers.manager import ProviderManager
 from api.providers.store import ProviderConfigStore
 from api.routes import chat, files, images, memory, sessions, balance, providers
@@ -26,10 +26,10 @@ from api.routes import news as news_router
 from api.routes import mcp as mcp_router
 from api.routes import restart as restart_router
 from api.routes import env_vars as env_vars_router
-from api.session_manager import SessionManager, SessionState
-from api.ws_registry import WebSocketRegistry
+from api.session.manager import SessionManager, SessionState
+from api.session.ws_registry import WebSocketRegistry
 from agent.graph import build_agent
-from memory.narrative import MEMORY_PATH, LongTermMemoryInterface
+from api.memory.narrative import MEMORY_PATH, LongTermMemoryInterface
 from tools.mcp import init_mcp_tools, close_mcp
 from version import __version__
 
@@ -43,7 +43,7 @@ async def _load_const_sessions(app: FastAPI):
     if not const_list:
         return
 
-    if app.state.llm is None:
+    if app.state.default_llm is None:
         print(f"[const] Skipping {len(const_list)} const session(s) — no LLM available")
         return
 
@@ -65,7 +65,7 @@ async def _load_const_sessions(app: FastAPI):
             checkpointer = MemorySaver()
             if reconstructed:
                 agent = build_agent(
-                    model=app.state.llm,
+                    model=app.state.default_llm,
                     tools=app.state.tools,
                     system_prompt=app.state.system_prompt,
                     checkpointer=checkpointer,
@@ -119,24 +119,23 @@ async def lifespan(app: FastAPI):
         print(f"[context-window] auto-filled {total_filled} model(s) from OpenRouter")
 
     # 2. 其他共享资源（LLM 统一从 ProviderManager 获取）
-    try:
-        app.state.llm = get_llm(provider_manager)
-    except RuntimeError as e:
-        print(f"[llm] {e}")
+    app.state.default_llm = provider_manager.get_default_llm(
+        temperature=0.7, streaming=True
+    )
+    if app.state.default_llm is None:
         print(
             "[llm] No LLM configured — chat will be read-only until a provider is added"
         )
-        app.state.llm = None
     app.state.system_prompt = get_system_prompt()
     app.state.native_tools = get_tools()
     app.state.session_manager = SessionManager()
     app.state.ws_registry = WebSocketRegistry()
     app.state.ltm = LongTermMemoryInterface(
         MEMORY_PATH,
-        llm=app.state.llm,
+        llm=app.state.default_llm,
         ws_registry=app.state.ws_registry,
     )
-    if app.state.llm is not None:
+    if app.state.default_llm is not None:
         app.state.ltm.start_listening()
     else:
         print("[ltm] Skipped (no LLM available)")

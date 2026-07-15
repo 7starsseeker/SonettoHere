@@ -1,8 +1,11 @@
 """Provider 管理器 — 按 id 索引。"""
 
 from collections.abc import Iterator
+from typing import Any
 
-from api.providers import Provider, ProviderConfig
+from langchain_core.language_models.chat_models import BaseChatModel
+
+from api.providers import FALLBACK_CTX, Provider, ProviderConfig
 from api.providers.store import ProviderConfigStore
 
 
@@ -46,6 +49,44 @@ class ProviderManager:
     @property
     def count(self) -> int:
         return len(self._providers)
+
+    def get_default_provider(self) -> Provider | None:
+        """优先返回 is_default_provider=True 的 provider，否则返回第一个 enabled provider。"""
+        for provider in self.iter_enabled():
+            if provider.config.is_default_provider:
+                return provider
+        for provider in self.iter_enabled():
+            return provider
+        return None
+
+    def get_default_context(self) -> tuple[int, str]:
+        """返回默认供应商的上下文窗口大小和模型名。"""
+        provider = self.get_default_provider()
+        if provider is None:
+            return FALLBACK_CTX, ""
+        model = provider.default_model
+        ctx = provider.config.model_context_windows.get(model, FALLBACK_CTX)
+        return ctx, model
+
+    def create_llm(
+        self, provider_id: str, model_name: str, **kwargs: Any
+    ) -> tuple[BaseChatModel, str, int] | None:
+        """按指定 provider + model 创建 LLM，返回 (llm, model_name, max_tokens)。
+        provider 不存在时返回 None。"""
+        try:
+            provider = self.get(provider_id)
+        except KeyError:
+            return None
+        llm = provider.create_llm(model_name, **kwargs)
+        max_tokens = provider.config.model_context_windows.get(model_name, FALLBACK_CTX)
+        return llm, model_name, max_tokens
+
+    def get_default_llm(self, **kwargs: Any) -> BaseChatModel | None:
+        """获取默认 provider 的 LLM。无可用 provider 时返回 None。"""
+        provider = self.get_default_provider()
+        if provider is None:
+            return None
+        return provider.create_llm(provider.default_model, **kwargs)
 
     # ── 配置 CRUD（委托 store 并同步缓存）────────────────
 

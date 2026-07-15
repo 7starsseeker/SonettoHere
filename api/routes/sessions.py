@@ -3,11 +3,12 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from api.const_session_store import flatten_content
-from api.context_usage import estimate_context_usage
-from api.dependencies import get_llm
+from api.agent.context_usage import estimate_context_usage_from_session
+from api.session.const_store import flatten_content
+from langchain_core.language_models.chat_models import BaseChatModel
+
 from api.providers import FALLBACK_CTX
-from agent.prompts import get_system_prompt_parts
+from api.providers.manager import ProviderManager
 
 router = APIRouter()
 
@@ -39,8 +40,7 @@ async def get_session(session_id: str, request: Request):
         "session_id": session.session_id,
         "message_count": session.message_count,
         "created_at": session.created_at,
-        "has_active_agent": session._active_task is not None
-        and not session._active_task.done(),
+        "has_active_agent": session.has_active_task(),
         "is_const": session.is_const,
         "const_name": session.const_name,
     }
@@ -70,20 +70,20 @@ async def get_messages(session_id: str, request: Request):
 @router.post("/sessions/{session_id}/undo")
 async def undo_session_messages(session_id: str, request: Request, n: int = 1):
     """撤回最近 n 轮对话（默认撤回最后一轮）。"""
-    from api.time_traveler import undo_rounds
+    from api.agent.time_traveler import undo_rounds
 
     sm = request.app.state.session_manager
     session = sm.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    if session._graph is None:
+    if session.get_graph() is None:
         raise HTTPException(
             status_code=400, detail="No agent graph available for this session"
         )
 
     config = {"configurable": {"thread_id": session_id}}
-    deleted = await undo_rounds(session._graph, config, n=n)
-    session.message_count = max(0, session.message_count - deleted)
+    deleted = await undo_rounds(session.get_graph(), config, n=n)
+    session.reduce_messages(deleted)
     return {"deleted_count": deleted}
 
 
@@ -94,30 +94,13 @@ async def get_context_usage(session_id: str, request: Request):
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     mgr = getattr(request.app.state, "provider_manager", None)
-    max_tokens = FALLBACK_CTX
-    model_name = ""
-    if mgr is not None and mgr.count > 0:
-        for provider in mgr.iter_enabled():
-            model_name = provider.default_model
-            max_tokens = provider.config.model_context_windows.get(model_name, FALLBACK_CTX) if model_name else FALLBACK_CTX
-            break
+    max_tokens, model_name = mgr.get_default_context() if mgr else (FALLBACK_CTX, "")
 
-    system_prompt = request.app.state.system_prompt
-    try:
-        cpt = await session.checkpointer.aget_tuple(
-            {"configurable": {"thread_id": session.session_id}}
-        )
-        counting_messages = (
-            cpt.checkpoint.get("channel_values", {}).get("messages", []) if cpt else []
-        )
-    except Exception:
-        counting_messages = []
-    usage = estimate_context_usage(
-        messages=counting_messages,
-        system_prompt=system_prompt,
+    usage = await estimate_context_usage_from_session(
+        session,
+        request.app.state.system_prompt,
         max_tokens=max_tokens,
         model_name=model_name,
-        system_prompt_parts=get_system_prompt_parts(),
     )
     usage["session_id"] = session_id
     return usage
@@ -130,7 +113,7 @@ async def delete_session(session_id: str, request: Request):
 
     # 若为 const 会话，先清理磁盘文件
     if session is not None and session.is_const:
-        from api.const_session_store import delete_const_session
+        from api.session.const_store import delete_const_session
 
         delete_const_session(session_id)
 
@@ -151,7 +134,7 @@ async def constify_session(session_id: str, body: ConstifyRequest, request: Requ
         raise HTTPException(status_code=404, detail="Session not found")
 
     # Agent 运行中禁止固定
-    if session._active_task is not None and not session._active_task.done():
+    if session.has_active_task():
         raise HTTPException(status_code=409, detail="Agent 仍在运行中，无法固定会话")
 
     # 从 checkpointer 提取消息
@@ -165,7 +148,7 @@ async def constify_session(session_id: str, body: ConstifyRequest, request: Requ
     except Exception:
         raw_messages = []
 
-    from api.const_session_store import save_const_session, serialize_messages
+    from api.session.const_store import save_const_session, serialize_messages
 
     metadata = {
         "created_at": session.created_at,
@@ -176,8 +159,7 @@ async def constify_session(session_id: str, body: ConstifyRequest, request: Requ
     save_const_session(session.session_id, body.name, metadata, serialized)
 
     # 标记为 const
-    session.is_const = True
-    session.const_name = body.name
+    session.constify(body.name)
 
     return {
         "session_id": session.session_id,
@@ -235,11 +217,12 @@ async def generate_session_title(session_id: str, request: Request):
 
     try:
         # 优先通过 provider_manager 动态获取 LLM（支持 Web UI 添加后的热更新）
-        mgr = getattr(request.app.state, "provider_manager", None)
+        mgr: ProviderManager | None = getattr(request.app.state, "provider_manager", None)
+        llm: BaseChatModel | None
         if mgr is not None and mgr.count > 0:
-            llm = get_llm(mgr)
+            llm = mgr.get_default_llm(temperature=0.7, streaming=True)
         else:
-            llm = request.app.state.llm
+            llm = request.app.state.default_llm
 
         if llm is None:
             raise HTTPException(
@@ -267,14 +250,13 @@ async def generate_session_title(session_id: str, request: Request):
 @router.delete("/sessions/{session_id}/const")
 async def unconstify_session(session_id: str, request: Request):
     """取消固定，删除磁盘文件。"""
-    from api.const_session_store import delete_const_session
+    from api.session.const_store import delete_const_session
 
     delete_const_session(session_id)
 
     sm = request.app.state.session_manager
     session = sm.get(session_id)
     if session is not None:
-        session.is_const = False
-        session.const_name = ""
+        session.unconstify()
 
     return {"status": "ok"}
