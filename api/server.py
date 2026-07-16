@@ -8,14 +8,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import time
 
-from api.core.auth import load_or_create_token
 from api.session.const_store import (
     deserialize_messages,
     load_all_const_sessions,
 )
-from api.core.dependencies import get_system_prompt, get_tools
+from agent.prompts import build_system_prompt
 from api.core.health import get_health_report
-from api.providers.manager import ProviderManager
+from api.providers.manager import init_manager
 from api.providers.store import ProviderConfigStore
 from api.routes import chat, files, images, memory, sessions, balance, providers
 from api.routes import path_whitelist as path_whitelist_router
@@ -26,11 +25,11 @@ from api.routes import news as news_router
 from api.routes import mcp as mcp_router
 from api.routes import restart as restart_router
 from api.routes import env_vars as env_vars_router
-from api.session.manager import SessionManager, SessionState
-from api.session.ws_registry import WebSocketRegistry
+from api.session.manager import SessionState, session_manager
 from agent.graph import build_agent
 from api.memory.narrative import MEMORY_PATH, LongTermMemoryInterface
-from tools.mcp import init_mcp_tools, close_mcp
+from api.tools.manager import ToolManager
+from api.providers.default_llm import init_provider_manager, get_default_llm
 from version import __version__
 
 from api.middleware.auth import AuthMiddleware
@@ -38,12 +37,12 @@ from api.middleware.auth import AuthMiddleware
 
 async def _load_const_sessions(app: FastAPI):
     """从 YAML 重建所有 const 固定会话到内存 SessionManager。"""
-    sm = app.state.session_manager
+    sm = session_manager
     const_list = load_all_const_sessions()
     if not const_list:
         return
 
-    if app.state.default_llm is None:
+    if get_default_llm() is None:
         print(f"[const] Skipping {len(const_list)} const session(s) — no LLM available")
         return
 
@@ -52,7 +51,7 @@ async def _load_const_sessions(app: FastAPI):
     loaded = 0
     for const_data in const_list:
         sid = const_data.get("session_id")
-        if not sid or sid in sm._sessions:
+        if not sid or sm.exists(sid):
             continue
 
         metadata = const_data.get("metadata", {})
@@ -65,9 +64,9 @@ async def _load_const_sessions(app: FastAPI):
             checkpointer = MemorySaver()
             if reconstructed:
                 agent = build_agent(
-                    model=app.state.default_llm,
-                    tools=app.state.tools,
-                    system_prompt=app.state.system_prompt,
+                    model=get_default_llm(),
+                    tools=app.state.tool_manager.get_all(),
+                    system_prompt=build_system_prompt(),
                     checkpointer=checkpointer,
                 )
                 await agent.aupdate_state(
@@ -87,7 +86,7 @@ async def _load_const_sessions(app: FastAPI):
             is_const=True,
             const_name=const_name,
         )
-        sm._sessions[sid] = session
+        sm.put(sid, session)
         loaded += 1
 
     print(f"[const] 已加载 {loaded}/{len(const_list)} 个固定会话")
@@ -101,9 +100,9 @@ async def lifespan(app: FastAPI):
         migrated = provider_store.migrate_from_env()
         if migrated:
             print(f"[provider] migrated {migrated.label} from .env → providers.yaml")
-    provider_manager = ProviderManager(provider_store)
+    provider_manager = init_manager(provider_store)
     provider_manager.load_all()
-    app.state.provider_manager = provider_manager
+    init_provider_manager(provider_manager)
     print(f"[provider] loaded {provider_manager.count} provider(s)")
 
     # 预加载 OpenRouter 上下文窗口数据，为已配置的模型补充信息
@@ -119,42 +118,22 @@ async def lifespan(app: FastAPI):
         print(f"[context-window] auto-filled {total_filled} model(s) from OpenRouter")
 
     # 2. 其他共享资源（LLM 统一从 ProviderManager 获取）
-    app.state.default_llm = provider_manager.get_default_llm(
-        temperature=0.7, streaming=True
-    )
-    if app.state.default_llm is None:
+    if get_default_llm() is None:
         print(
             "[llm] No LLM configured — chat will be read-only until a provider is added"
         )
-    app.state.system_prompt = get_system_prompt()
-    app.state.native_tools = get_tools()
-    app.state.session_manager = SessionManager()
-    app.state.ws_registry = WebSocketRegistry()
-    app.state.ltm = LongTermMemoryInterface(
-        MEMORY_PATH,
-        llm=app.state.default_llm,
-        ws_registry=app.state.ws_registry,
-    )
-    if app.state.default_llm is not None:
-        app.state.ltm.start_listening()
-    else:
-        print("[ltm] Skipped (no LLM available)")
-
-    # 从 YAML 配置加载 MCP 工具
-    app.state.mcp_tools = await init_mcp_tools()
-    app.state.tools = app.state.native_tools + app.state.mcp_tools
+    app.state.tool_manager = ToolManager()
+    await app.state.tool_manager.load_all()
+    app.state.ltm = LongTermMemoryInterface(MEMORY_PATH)
+    app.state.ltm.start_listening()
 
     # 加载 const 固定会话（需要 tools 已就绪）
     await _load_const_sessions(app)
 
-    # 3. 初始化认证 Token
-    app.state.auth_token = load_or_create_token()
-    print(f"[auth] token: {app.state.auth_token}")
-
     yield
 
     # 关闭：清理资源
-    await close_mcp()
+    await app.state.tool_manager.close()
     await app.state.ltm.stop_listening()
 
 

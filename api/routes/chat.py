@@ -10,13 +10,15 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from api.agent import interaction
 from api.agent.context_usage import estimate_context_usage_from_session
+from agent.prompts import build_system_prompt
 from api.agent.turn import run_agent_turn
 from api.providers import FALLBACK_CTX
-from api.session.manager import SessionState
+from api.providers.manager import get_manager
+from api.session.manager import SessionState, session_manager
 
 router = APIRouter()
 
-Handler = Callable[[WebSocket, str, SessionState, asyncio.Task | None, dict, object], Awaitable[asyncio.Task | None]]
+Handler = Callable[[WebSocket, str, SessionState, asyncio.Task | None, dict], Awaitable[asyncio.Task | None]]
 
 
 def _resume_sub_agent(ws: WebSocket, session: SessionState) -> asyncio.Task | None:
@@ -54,7 +56,6 @@ async def _handle_ping(
     session: SessionState,
     agent_task: asyncio.Task | None,
     msg: dict,
-    app_state,
 ) -> asyncio.Task | None:
     """处理 ping 心跳。"""
     await ws.send_json({"type": "pong", "payload": {}})
@@ -68,7 +69,7 @@ async def _handle_chat(
     session: SessionState,
     agent_task: asyncio.Task | None,
     msg: dict,
-    app_state,
+
 ) -> asyncio.Task | None:
     """处理聊天消息：创建 Agent 轮次。"""
     if agent_task is not None and not agent_task.done():
@@ -107,7 +108,7 @@ async def _handle_user_response(
     session: SessionState,
     agent_task: asyncio.Task | None,
     msg: dict,
-    app_state,
+
 ) -> asyncio.Task | None:
     """处理用户交互响应。"""
     payload = msg.get("payload", {})
@@ -125,7 +126,7 @@ async def _handle_cancel(
     session: SessionState,
     agent_task: asyncio.Task | None,
     msg: dict,
-    app_state,
+
 ) -> asyncio.Task | None:
     """处理取消请求。"""
     if agent_task is not None and not agent_task.done():
@@ -140,7 +141,7 @@ async def _handle_update_auto_approve(
     session: SessionState,
     agent_task: asyncio.Task | None,
     msg: dict,
-    app_state,
+
 ) -> asyncio.Task | None:
     """更新自动批准设置。"""
     interaction.set_session_auto_approve(
@@ -150,23 +151,20 @@ async def _handle_update_auto_approve(
     return agent_task
 
 @router.websocket("/ws/chat/{session_id}")
-async def websocket_chat(ws: WebSocket, session_id: str):
+async def websocket_chat(ws: WebSocket, session_id: str) -> None:
     """WebSocket 聊天端点 — 接收消息、派发、生命周期管理。"""
     await ws.accept()
 
     # ── 初始化会话 ────────────────────────────────────────
-    app_state = ws.app.state
-    session = app_state.session_manager.get_or_create(session_id)
-
-    # 注册 WebSocket 到注册表，供后台记忆 consumer 推送事件
-    app_state.ws_registry.register(session_id, ws)
+    session = session_manager.get_or_create(session_id)
+    session.ws = ws  # 供后台记忆 consumer 推送事件
 
     # ── 推送初始上下文用量 ─────────────────────────────────
-    mgr = getattr(app_state, "provider_manager", None)
+    mgr = get_manager()
     default_max_tokens, default_model = mgr.get_default_context() if mgr else (FALLBACK_CTX, "")
     initial_usage = await estimate_context_usage_from_session(
         session,
-        app_state.system_prompt,
+        build_system_prompt(),
         max_tokens=default_max_tokens,
         model_name=default_model,
     )
@@ -184,13 +182,13 @@ async def websocket_chat(ws: WebSocket, session_id: str):
             handler = _HANDLERS.get(msg.get("type", ""))
             if handler is not None:
                 agent_task = await handler(
-                    ws, session_id, session, agent_task, msg, app_state
+                    ws, session_id, session, agent_task, msg
                 )
 
     except WebSocketDisconnect:
         pass  # 客户端断开是正常行为
     finally:
-        app_state.ws_registry.unregister(session_id)
+        session.ws = None
         if agent_task is not None and not agent_task.done():
             agent_task.cancel()
         session.clear_active_task()

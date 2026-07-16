@@ -18,6 +18,8 @@ from api.agent.context_usage import estimate_context_usage_from_session
 from api.agent.turn_sender import WsEventSender
 from api.callbacks.websocket_callback import WebSocketCallback
 from api.providers import FALLBACK_CTX
+from api.providers.manager import get_manager
+from api.providers.default_llm import get_default_llm
 from api.providers.manager import ProviderManager
 from api.session.const_store import save_const_session, serialize_messages
 from api.session.manager import SessionState
@@ -428,8 +430,8 @@ async def run_agent_turn(
 
     # 1. 解析 LLM 配置
     llm_conf: _LlmConfig = _resolve_llm(
-        provider_manager=getattr(app_state, "provider_manager", None),
-        default_llm=app_state.default_llm,
+        provider_manager=get_manager(),
+        default_llm=get_default_llm(),
         provider_id=provider_id,
         model_name=model_name,
     )
@@ -442,7 +444,7 @@ async def run_agent_turn(
 
     # 2. 构建执行上下文
     ctx: _TurnContext = await _build_turn_context(
-        tools=app_state.tools,
+        tools=app_state.tool_manager.get_all(),
         session=session,
         ws=ws,
         llm_conf=llm_conf,

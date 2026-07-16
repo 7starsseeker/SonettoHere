@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from pathlib import Path
 import yaml
+from functools import lru_cache
 
 router = APIRouter()
 
@@ -32,6 +33,7 @@ class ListNewsResponse(BaseModel):
 # ── 读取 ──
 
 
+@lru_cache(maxsize=1)
 def _load_news() -> list[NewsEntry]:
     if not NEWS_PATH.exists():
         return []
@@ -47,6 +49,6 @@ def _load_news() -> list[NewsEntry]:
 
 
 @router.get("/news", response_model=ListNewsResponse)
-def list_news():
+def list_news() -> ListNewsResponse:
     """返回所有更新动态，按日期降序排列。"""
     return ListNewsResponse(news=_load_news())
