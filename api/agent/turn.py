@@ -8,7 +8,6 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import WebSocket
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from agent.graph import Sonetto, build_agent
@@ -254,7 +253,6 @@ def _resolve_llm(
 async def _build_turn_context(
     tools: list,
     session: SessionState,
-    ws: WebSocket,
     llm_conf: _LlmConfig,
     user_message: str,
     image_recognition: bool,
@@ -262,7 +260,7 @@ async def _build_turn_context(
 ) -> _TurnContext:
     """构建 Agent 图、输入消息和执行配置。"""
     system_prompt = build_system_prompt()
-    cb_sender = CallbackSender.from_ws(ws)
+    cb_sender = CallbackSender.from_context()
     ws_callback = WebSocketCallback(cb_sender)
 
     agent = build_agent(
@@ -409,7 +407,6 @@ async def _postprocess_turn(
 
 
 async def run_agent_turn(
-    ws: WebSocket,
     session: SessionState,
     user_message: str,
     private_mode: bool = False,
@@ -426,8 +423,9 @@ async def run_agent_turn(
       3. _execute_agent_turn  — 流式执行、异常/取消处理
       4. _postprocess_turn    — 消息计数、记忆持久化、Const 保存、Sub-agent 回调
     """
+    ws = interaction.current_ws.get()
     app_state = ws.app.state
-    sender = TurnSender(ws)
+    sender = TurnSender.from_context()
 
     # 1. 解析 LLM 配置
     llm_conf: _LlmConfig = _resolve_llm(
@@ -447,7 +445,6 @@ async def run_agent_turn(
     ctx: _TurnContext = await _build_turn_context(
         tools=app_state.tool_manager.get_all(),
         session=session,
-        ws=ws,
         llm_conf=llm_conf,
         user_message=user_message,
         image_recognition=image_recognition,

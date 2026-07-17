@@ -31,7 +31,7 @@ def _resume_sub_agent(ws: WebSocket, session: SessionState) -> asyncio.Task | No
     task = session.consume_sub_agent_task()
     interaction.current_ws.set(ws)
     agent_task = asyncio.create_task(
-        run_agent_turn(ws, session, task, private_mode=False)
+        run_agent_turn(session, task, private_mode=False)
     )
     session.set_active_task(agent_task)
     return agent_task
@@ -59,7 +59,7 @@ async def _handle_ping(
     msg: dict,
 ) -> asyncio.Task | None:
     """处理 ping 心跳。"""
-    await ChatSender.from_ws(ws).pong()
+    await ChatSender.from_context().pong()
     return agent_task
 
 
@@ -82,13 +82,12 @@ async def _handle_chat(
         return agent_task
 
     auto_approve = payload.get("auto_approve", False)
-    interaction.current_ws.set(ws)  # 供工具函数通过 WebSocket 推送交互
+    interaction.current_ws.set(ws)  # 供工具函数/Sender.from_context() 通过 WebSocket 推送交互
     interaction.current_session_id.set(session_id)
     interaction.set_session_auto_approve(session_id, auto_approve)
 
     agent_task = asyncio.create_task(
         run_agent_turn(
-            ws,
             session,
             user_message,
             private_mode=payload.get("private", False),
@@ -159,6 +158,7 @@ async def websocket_chat(ws: WebSocket, session_id: str) -> None:
     # ── 初始化会话 ────────────────────────────────────────
     session = session_manager.get_or_create(session_id)
     session.ws = ws  # 供后台记忆 consumer 推送事件
+    interaction.current_ws.set(ws)  # 供 ChatSender/TurnSender/CallbackSender 使用
 
     # ── 推送初始上下文用量 ─────────────────────────────────
     mgr = get_manager()
@@ -169,7 +169,7 @@ async def websocket_chat(ws: WebSocket, session_id: str) -> None:
         max_tokens=default_max_tokens,
         model_name=default_model,
     )
-    await ChatSender.from_ws(ws).context_usage(initial_usage)
+    await ChatSender.from_context().context_usage(initial_usage)
 
     # ── 断线重连时恢复 sub-agent ──────────────────────────
     agent_task = _resume_sub_agent(ws, session)
