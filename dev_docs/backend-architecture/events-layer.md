@@ -4,17 +4,23 @@
 
 **横向基础设施层**，负责后端所有 WebSocket 事件发送的统一封装与错误处理。
 
-不归属于纵向的 7 层分层体系，而是被多个层级共同使用：
+不归属于纵向的 7 层分层体系，而是被多个层级共同使用。所有 Sender 通过 `interaction.current_ws` ContextVar 隐式获取 WebSocket 引用（记忆层除外——使用 `from_session_id` 从 `session_manager` 查找）。
 
 ```
-路由层 (ChatSender)     Agent 层 (TurnSender)     回调层 (CallbackSender)     记忆层 (MemorySender)
-     │                        │                         │                          │
-     └────────────────────────┼─────────────────────────┼──────────────────────────┘
-                              ▼                         ▼                          ▼
-                       api/events/ (WsTransport 基类 + 5 个语义 Sender)
-                              │
-                              ▼
-                       WebSocket.send_json()
+                          interaction.current_ws (ContextVar)
+                                   │
+              ┌────────────────────┼─────────────────────┐
+              ▼                    ▼                     ▼
+       ChatSender           TurnSender             CallbackSender
+       (路由层)              (Agent 层)              (回调层)              MemorySender
+              │                    │                     │               (记忆层: 从
+              └────────────────────┼─────────────────────┘            session_manager
+                                   ▼                                    查找 ws)
+                            api/events/
+                     (WsTransport 基类 + 5 个语义 Sender)
+                                   │
+                                   ▼
+                            WebSocket.send_json()
 ```
 
 ## 设计目标
@@ -72,7 +78,7 @@ class WsTransport:
 | `tool_error(tool_name, error)` | `tool_error` |
 | `done(turn_id, context_usage)` | `done` |
 
-取代 `api/agent/turn_sender.py` 中原有的 `WsEventSender`。
+取代 `api/agent/turn_sender.py` 中原有的 `WsEventSender`。通过 `TurnSender.from_context()` 获取实例——`run_agent_turn()` 执行时 `interaction.current_ws` ContextVar 已由路由层设好，随 `asyncio.create_task` 自动继承。
 
 ### CallbackSender (`callback.py`) — LangChain 回调事件
 
@@ -85,7 +91,7 @@ class WsTransport:
 | `tool_end(call_id, tool_name, output, elapsed, tool_data?)` | `tool_end` + `tool_data` |
 | `tool_error(call_id, tool_name, error)` | `tool_error` |
 
-供 `WebSocketCallback` 使用，替代原有的裸 `self._ws.send_json()` 调用。
+供 `WebSocketCallback` 使用，替代原有的裸 `self._ws.send_json()` 调用。通过 `CallbackSender.from_context()` 获取实例——`_build_turn_context()` 内部直接调用，无需传入 `ws`。
 
 ### MemorySender (`memory.py`) — 记忆层事件
 
@@ -97,7 +103,7 @@ class WsTransport:
 | `memory_tool_error(turn_id, tool_name, error)` | `memory_tool_error` |
 | `memory_done(turn_id)` | `memory_done` |
 
-供 `narrative.py` 的 `_consumer` 和 `MemoryToolCallback` 使用。
+供 `narrative.py` 的 `_consumer` 和 `MemoryToolCallback` 使用。因 `_consumer` 是独立后台任务（不从 WebSocket handler 继承 ContextVar），通过 `MemorySender.from_session_id(session_id)` 获取实例，使用 `session_manager` 查找当前会话的 WebSocket 引用。
 
 ### ToolSender (`tool.py`) — 工具交互事件
 
@@ -106,7 +112,7 @@ class WsTransport:
 | `ask_user(tool_name, question, mode, options, interaction_id, code?)` | `ask_user` |
 | `sub_session_created(sub_session_id, parent_session_id, task, name)` | `sub_session_created` |
 
-供 `ask_user` 系列交互工具和 `call_sub_agent` 工具使用。通过 `from_context()` 工厂方法获取实例。
+供 `ask_user` 系列交互工具和 `call_sub_agent` 工具使用。通过 `ToolSender.from_context()` 获取实例——Agent 轮次执行时 ContextVar 由路由层设置并自动继承。
 
 ### ChatSender (`chat.py`) — 路由级事件
 
@@ -115,16 +121,16 @@ class WsTransport:
 | `pong()` | `pong` |
 | `context_usage(data)` | `context_usage` |
 
-供 `routes/chat.py` 使用，替代连接建立时的裸推送和 ping/pong 响应。
+供 `routes/chat.py` 使用。通过 `ChatSender.from_context()` 获取实例——`interaction.current_ws.set(ws)` 在 `ws.accept()` 后立即执行，确保整个 WebSocket handler 生命周期内均可使用。
 
 ## 工厂方法对照表
 
 | 方法 | 参数 | 适用场景 |
 |------|------|---------|
-| `from_ws(ws)` | `WebSocket` | 直接拿到 ws 实例（路由层、Agent 层） |
-| `from_session(session)` | `SessionState` | 已有会话对象（记忆层内直接传递） |
-| `from_session_id(session_id)` | `str` | 只有 session_id（记忆层回调中查找） |
-| `from_context()` | — | 通过 `interaction.current_ws` ContextVar（工具层） |
+| `from_context()` | — | **首选方式**。通过 `interaction.current_ws` ContextVar 获取（路由/Agent/回调/工具层） |
+| `from_session_id(session_id)` | `str` | 后台记忆层专用。`_consumer` 独立任务不继承 ContextVar，需从 session 查找 |
+| `from_session(session)` | `SessionState` | 兜底备用，已有 SessionState 对象时使用 |
+| `from_ws(ws)` | `WebSocket` | 兜底备用，直接注入 ws 实例（极少使用） |
 
 ## 错误处理策略
 
@@ -161,20 +167,32 @@ class WsTransport:
 
 ### 工厂方法解耦 WS 获取
 
-此前各模块获取 WebSocket 引用的方式不统一：路由层直接传 `ws`，工具层通过 `interaction.current_ws` ContextVar，记忆层通过 `session_manager` 查找。工厂方法将这一差异封装在基类中，各模块只需选择合适的工厂：
+各模块获取 WebSocket 引用的方式曾经不统一。引入 `interaction.current_ws` ContextVar 后，大多数模块统一为 `from_context()`，只有后台独立的记忆 `_consumer` 任务需要特别处理：
 
 ```python
+# ★ 首选：from_context() — 路由/Agent/回调/工具层
+#    ContextVar 在 ws.accept() 后设置，随 asyncio.create_task 自动继承
+
+# 路由级
+sender = ChatSender.from_context()
+await sender.pong()
+
+# Agent 轮次（run_agent_turn 内部）
+sender = TurnSender.from_context()
+await sender.done(turn_id, usage)
+
+# LangChain 回调（_build_turn_context 内部）
+sender = CallbackSender.from_context()
+await sender.thinking_start(timestamp)
+
 # 工具层
 sender = ToolSender.from_context()
 await sender.ask_user(...)
 
-# 记忆层  
+# ★ 例外：from_session_id() — 后台记忆层
+#    _consumer 是服务器启动时创建的独立后台任务，不继承任何 WebSocket 的 ContextVar
 sender = MemorySender.from_session_id(session_id)
 await sender.memory_done(turn_id)
-
-# Agent 层（turn.py）
-sender = TurnSender(ws)
-await sender.done(turn_id, usage)
 ```
 
 ### 统一消息协议

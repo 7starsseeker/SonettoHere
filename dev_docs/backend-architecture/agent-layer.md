@@ -232,7 +232,7 @@ run_agent_turn()                    ← 顶层编排入口
     │   ▼
     ├── 阶段 2: _build_turn_context()
     │   │  build_system_prompt() → system_prompt
-    │   │  CallbackSender(ws) → WebSocketCallback → 注入 LangChain 事件链路
+    │   │  CallbackSender.from_context() → WebSocketCallback → 注入 LangChain 事件链路
     │   │  build_agent() → graph (LangGraph CompiledStateGraph)
     │   │  处理多模态输入（图片 base64 编码）
     │   │  返回 _TurnContext (system_prompt, agent, inputs, config)
