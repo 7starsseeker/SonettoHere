@@ -18,7 +18,7 @@
 |---|---|---|
 | `turn.py` | Agent 对话编排：构建 Agent 图、流式执行、取消处理、记忆持久化 | `_LlmConfig`, `_TurnContext`, `_TurnResult`, `run_agent_turn()` |
 | `interaction.py` | 交互注册表：管理 ask_user 系列工具的挂起与唤醒 | `register()`, `resolve()`, `cancel_all()` |
-| `turn_sender.py` | WebSocket 事件发送器，封装一轮对话中所有前端消息 | `WsEventSender` |
+| `events/turn.py` (TurnSender) | 从 api/events/ 导入的 Agent 轮次事件发送器 | `TurnSender` |
 | `context_usage.py` | 上下文窗口 token 用量估算（基于 tiktoken） | `count_tokens()`, `estimate_context_usage()` |
 | `time_traveler.py` | 对话轮次撤回（基于 RemoveMessage 机制） | `undo_rounds()`, `undo_last_round()`, `undo_all()` |
 
@@ -92,7 +92,8 @@ async def _build_turn_context(
 ) -> _TurnContext:
     """构建 Agent 图、输入消息和执行配置。"""
     system_prompt = build_system_prompt()
-    ws_callback = WebSocketCallback(ws)
+    cb_sender = CallbackSender.from_ws(ws)
+    ws_callback = WebSocketCallback(cb_sender)
 
     agent = build_agent(
         model=llm_conf.llm,
@@ -127,7 +128,7 @@ async def _stream_turn(
     graph: Sonetto,
     inputs: dict[str, list[HumanMessage]],
     config: dict[str, Any],
-    sender: WsEventSender,
+    sender: TurnSender,
     session: SessionState,
     system_prompt: str,
     model_name: str | None = None,
@@ -231,7 +232,7 @@ run_agent_turn()                    ← 顶层编排入口
     │   ▼
     ├── 阶段 2: _build_turn_context()
     │   │  build_system_prompt() → system_prompt
-    │   │  WebSocketCallback(ws) → 注入 LangChain 事件链路
+    │   │  CallbackSender(ws) → WebSocketCallback → 注入 LangChain 事件链路
     │   │  build_agent() → graph (LangGraph CompiledStateGraph)
     │   │  处理多模态输入（图片 base64 编码）
     │   │  返回 _TurnContext (system_prompt, agent, inputs, config)
@@ -284,7 +285,7 @@ run_agent_turn()                    ← 顶层编排入口
 
 - 全程异步：`async for` 消费事件，`await` 发送 WebSocket 消息
 - 流式 token 通过 `on_llm_new_token` 实时推送，用户边看边等
-- `WsEventSender` 封装统一的消息结构 `{"type": ..., "payload": ...}`
+- `TurnSender` 封装统一的消息结构 `{"type": ..., "payload": ...}`
 
 ### 可中断
 
@@ -309,7 +310,7 @@ run_agent_turn()                    ← 顶层编排入口
 **评估结果**：基本合规，但有**一处轻微违例**：
 
 **违规项：`turn.py` 直接导入 `WebSocketCallback`**
-- `turn.py` 第 18 行：`from api.callbacks.websocket_callback import WebSocketCallback`
+- `turn.py` 导入 `from api.callbacks.websocket_callback import WebSocketCallback`
 - 这是第③层直接导入第④层的符号，违反"下层不依赖上层"（实际是平行层级的逆向依赖）
 - **影响**：虽然目前无循环导入风险（回调层不依赖 agent 层），但这种依赖模糊了层级边界。如果未来重构回调层，agent 层需相应修改。
 

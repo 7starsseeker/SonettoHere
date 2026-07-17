@@ -65,9 +65,9 @@ Handler = Callable[[str, dict[str, Any], str | None], dict[str, Any] | None]
 
 ```python
 class WebSocketCallback(BaseCallbackHandler):
-    def __init__(self, ws: WebSocket):
+    def __init__(self, sender: CallbackSender):
         super().__init__()
-        self._ws = ws
+        self._sender = sender
         self._thinking_started = False
         self._tool_start_time: dict[str, float] = {}
         self._tool_names: dict[str, str] = {}
@@ -75,24 +75,15 @@ class WebSocketCallback(BaseCallbackHandler):
 
     async def on_llm_start(self, serialized, prompts, **kwargs):
         self._thinking_started = True
-        await self._ws.send_json({
-            "type": "thinking_start",
-            "payload": {"timestamp": time.time()},
-        })
+        await self._sender.thinking_start(time.time())
 
     async def on_llm_new_token(self, token: str, **kwargs):
-        await self._ws.send_json({
-            "type": "token",
-            "payload": {"token": token},
-        })
+        await self._sender.token(token)
 
     async def on_llm_end(self, response, **kwargs):
         if self._thinking_started:
             self._thinking_started = False
-            await self._ws.send_json({
-                "type": "thinking_end",
-                "payload": {"timestamp": time.time()},
-            })
+            await self._sender.thinking_end(time.time())
 ```
 
 **工具事件** — 工具调用全生命周期跟踪：
@@ -105,14 +96,7 @@ class WebSocketCallback(BaseCallbackHandler):
         self._tool_names[run_id] = tool_name
         self._tool_inputs[run_id] = input_str
 
-        await self._ws.send_json({
-            "type": "tool_start",
-            "payload": {
-                "call_id": run_id,
-                "tool_name": tool_name,
-                "input": input_str[:500],
-            },
-        })
+        await self._sender.tool_start(run_id, tool_name, input_str[:500])
 
     async def on_tool_end(self, output, **kwargs):
         run_id = str(kwargs.get("run_id", ""))
@@ -134,16 +118,7 @@ class WebSocketCallback(BaseCallbackHandler):
         # 提取工具专属结构化数据
         tool_data = self._extract_tool_data(tool_name, output, tool_input)
 
-        await self._ws.send_json({
-            "type": "tool_end",
-            "payload": {
-                "call_id": run_id,
-                "tool_name": tool_name,
-                "output": out_str[:300],
-                "elapsed": round(elapsed, 2),
-                "tool_data": tool_data,
-            },
-        })
+        await self._sender.tool_end(run_id, tool_name, out_str[:300], round(elapsed, 2), tool_data)
 ```
 
 ### 注册/调度机制（`tool_extractors.py`）
@@ -235,7 +210,7 @@ LLM 开始生成
 
 - `WebSocketCallback` 通过 `BaseCallbackHandler` 接口与 LangChain 集成，不依赖任何 Agent 编排细节
 - 提取器系统通过装饰器注册，新增工具只需添加新装饰器函数，无需修改调度逻辑
-- `WsEventSender`（位于 agent 层）和 `WebSocketCallback`（位于 callbacks 层）共享同一 `WebSocket` 实例，但职责互补：前者发送编排层事件（`context_usage`、`answer`、`done`），后者发送 LangChain 事件（`token`、`tool_start/end`）
+- `TurnSender`（来自 api/events/ 横向层）和 `CallbackSender`（WebSocketCallback 内部使用）共享同一 `WebSocket` 实例，但职责互补：前者发送编排层事件（`context_usage`、`answer`、`done`），后者发送 LangChain 事件（`token`、`tool_start/end`）
 
 ### 可扩展
 
@@ -268,12 +243,12 @@ LLM 开始生成
 **约定**：回调层应仅依赖 LangChain SDK 和 FastAPI WebSocket，不依赖后端的业务模块（session、memory、tools 等）。
 
 **评估结果**：**合规**。`websocket_callback.py` 的导入链清晰：
-- `fastapi.WebSocket` — 框架基础
 - `langchain_core.callbacks.BaseCallbackHandler` — LangChain SDK
 - `langchain_core.outputs.LLMResult` — LangChain 类型
+- `api.events.CallbackSender` — 事件发送横向层
 - `.tool_extractors` — 同层模块引用
 
-无任何对 `api/session/`、`api/memory/`、`tools/`、`agent/` 的导入。
+不再直接导入 `fastapi.WebSocket`，通过 `CallbackSender` 屏蔽底层 send 细节。无对 `session/`、`memory/`、`tools/`、`agent/` 的导入。
 
 ### 职责单一
 
@@ -303,7 +278,7 @@ try:
     parsed = json.loads(out_str)
     if isinstance(parsed, dict) and parsed.get("success") is False:
         error_msg = parsed.get("error", "操作执行失败")
-        await self._ws.send_json({"type": "tool_error", ...})
+        await self._sender.tool_error(run_id, tool_name, error_msg)
         return  # 不继续发送 tool_end
 except (json.JSONDecodeError, TypeError):
     pass
