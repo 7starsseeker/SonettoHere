@@ -4,33 +4,29 @@ import random
 
 from fastapi import APIRouter, Request
 
-from api.memory.manager import MemoryManager
-
 router = APIRouter()
 
 
-@router.get("/narrative")
-async def get_narrative(request: Request) -> dict:
+@router.get("/long-term")
+async def get_long_term(request: Request) -> dict:
     ltm = request.app.state.ltm
-    return {"narrative": ltm.get_narrative()}
+    return {"long_term": ltm.get_narrative()}
 
 
 @router.get("/memories")
 async def get_memories(request: Request) -> dict:
     ltm = request.app.state.ltm
-    mm = MemoryManager(yaml_file=str(ltm._memory_path))
-    return mm.get_memories_grouped()
+    return ltm._mm.get_memories_grouped()
 
 
 @router.get("/moment")
 async def get_moment(request: Request) -> dict:
     ltm = request.app.state.ltm
-    mm = MemoryManager(yaml_file=str(ltm._memory_path))
-    items = mm.show()
+    items = ltm._mm.show()
     if not items:
         return {"moment": None}
     chosen = random.choice(items)
-    history = mm.show_description_history(chosen["id"])
+    history = ltm._mm.show_description_history(chosen["id"])
     return {
         "moment": {
             "id": chosen["id"],
