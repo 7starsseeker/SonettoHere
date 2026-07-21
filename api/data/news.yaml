@@ -1,4 +1,12 @@
 news:
+  - id: "upgrade-auto-install-deps"
+    title: "升级器自动安装新增依赖"
+    description: "upgrade.py 在 git pull 后自动检测依赖文件变更并安装对应依赖，不再需要手动执行 npm install 或 pip install -e ."
+    type: "feat"
+    date: "2026-07-21"
+    tags: ["升级", "依赖", "npm", "pip"]
+    version: ""
+    pr_number: 256
   - id: "v3.2.0-release"
     title: "发布 v3.2.0 版本"
     description: "v3.2.0 带来主动视觉工具集与自动微调工具集两大核心升级。主动视觉工具使 Sonetto 支持多模态主动感知，能直接从图像中读取信息；自动微调工具集根据模型能力智能过滤工具清单，提升工具调用精准度。另有 Pinia 状态管理层全面替换模块级单例、SessionState 数据类拆分、事件 Sender 语义封装等多项重构。"
