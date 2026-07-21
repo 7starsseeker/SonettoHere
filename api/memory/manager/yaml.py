@@ -1,18 +1,21 @@
 """YAML 文件后端的记忆管理器实现。"""
 
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 
 import portalocker
 import yaml
 
-from api.memory.manager.base import BaseMemoryManager, MemoryItem
+from api.memory.manager.base import BaseMemoryManager, SelfCheckReport
+from api.memory.manager.item import MemoryItem
 
 MAX_DESC_LENGTH = 75
 """记忆描述最大字数限制，超过此长度的创建/更新/合并请求将被驳回。"""
 
 
 class YamlMemoryManager(BaseMemoryManager):
-    def __init__(self, yaml_file: str):
+    def __init__(self, yaml_file: str) -> None:
         self._yaml_file = yaml_file
         self._ensure_file_exists()
 
@@ -43,93 +46,49 @@ class YamlMemoryManager(BaseMemoryManager):
     def _lock_path(self) -> str:
         return self._yaml_file + ".lock"
 
-    def add(self, description: str, theme: str) -> str:
+    @contextmanager
+    def _write_lock(self) -> Generator[None, None, None]:
         with portalocker.Lock(self._lock_path, timeout=5):
-            items = self._load_all()
-            new_id = self._generate_id()
-            items[new_id] = MemoryItem(description, theme)
-            self._save_all(items)
-        return new_id
+            yield
 
-    def delete(self, id: str) -> str:
+    def self_check(self) -> SelfCheckReport:
         with portalocker.Lock(self._lock_path, timeout=5):
-            items = self._load_all()
-            if id not in items:
-                raise ValueError(f"YamlMemoryManager: Memory item with ID {id} not found")
-            removed = items.pop(id)
-            self._save_all(items)
-        return removed.description
+            yaml_path = Path(self._yaml_file)
 
-    def merge(
-        self,
-        id1: str,
-        id2: str,
-        merged_description: str,
-        merged_theme: str,
-        reason: str,
-    ):
-        with portalocker.Lock(self._lock_path, timeout=5):
-            items = self._load_all()
-            if id1 not in items or id2 not in items:
-                raise ValueError(
-                    f"YamlMemoryManager: Memory items with IDs {id1} and {id2} not found"
+            # 1. 文件是否可达
+            if not yaml_path.exists():
+                return SelfCheckReport(
+                    status="FAIL",
+                    issues=[f"YAML 文件不存在: {self._yaml_file}"],
+                    repaired=[],
+                    item_count=0,
                 )
-            items[id1].merge(items[id2], reason, merged_description, merged_theme)
-            items.pop(id2)
-            self._save_all(items)
 
-    def update(
-        self,
-        id: str,
-        reason: str,
-        new_description: str | None = None,
-        new_theme: str | None = None,
-    ):
-        with portalocker.Lock(self._lock_path, timeout=5):
-            items = self._load_all()
-            if id not in items:
-                raise ValueError(f"YamlMemoryManager: Memory item with ID {id} not found")
-            items[id].update(reason, new_description, new_theme)
-            self._save_all(items)
+            # 2. 加载全部条目（含 YAML 解析校验）
+            try:
+                items = self._load_all()
+            except Exception as e:
+                return SelfCheckReport(
+                    status="FAIL",
+                    issues=[f"YAML 加载失败: {e}"],
+                    repaired=[],
+                    item_count=0,
+                )
+
+            # 3. 逐条校验字段完整性（介质无关）
+            issues, repaired = self._validate_all_items(items)
+
+            # 4. 有修复则写回
+            if repaired:
+                self._save_all(items)
+
+            status = "FAIL" if issues else ("WARN" if repaired else "OK")
+
+            return SelfCheckReport(
+                status=status,
+                issues=issues,
+                repaired=repaired,
+                item_count=len(items),
+            )
 
 
-class MemoryManagerBuilder:
-    """记忆管理器构造器。
-
-    所有后端使用同一建造形式，确保替换子类时调用方无需调整语法。
-
-    Usage::
-
-        # YAML 后端
-        mm = MemoryManagerBuilder() \\
-            .with_backend(YamlMemoryManager, yaml_file="path/to/memory.yaml") \\
-            .build()
-
-        # 自定义后端
-        mm = MemoryManagerBuilder() \\
-            .with_backend(MyCustomManager, arg1=...) \\
-            .build()
-
-        # 注入 LongTermMemory
-        ltm = LongTermMemory(
-            MemoryManagerBuilder()
-            .with_backend(YamlMemoryManager, yaml_file="path/to/memory.yaml")
-            .build()
-        )
-    """
-
-    def __init__(self) -> None:
-        self._cls: type[BaseMemoryManager] = YamlMemoryManager
-        self._kwargs: dict = {}
-
-    def with_backend(
-        self, cls: type[BaseMemoryManager], **kwargs: object
-    ) -> "MemoryManagerBuilder":
-        """指定 MemoryManager 子类及其构造参数。"""
-        self._cls = cls
-        self._kwargs = kwargs
-        return self
-
-    def build(self) -> BaseMemoryManager:
-        """构造并返回 MemoryManager 实例。"""
-        return self._cls(**self._kwargs)

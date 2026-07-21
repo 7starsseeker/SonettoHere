@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime
-from functools import lru_cache
+import functools
 from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -94,7 +94,7 @@ def _set_current_mm(mm: BaseMemoryManager | None) -> None:
 # ── 格式化辅助 ──────────────────────────────────────────────
 
 
-def _format_narrative(items: list[dict]) -> str:
+def _format_narrative(items: list[dict[str, str]]) -> str:
     """将 MemoryManager.show() 的输出格式化为人类可读的长记忆叙事文本。"""
     if not items:
         return ""
@@ -117,7 +117,7 @@ def _format_narrative(items: list[dict]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def _format_entries_for_tool(items: list[dict]) -> str:
+def _format_entries_for_tool(items: list[dict[str, str]]) -> str:
     """为 read_memories 工具格式化条目（按 theme 分组，带 ID）。"""
     if not items:
         return "（暂无记忆条目）"
@@ -137,18 +137,18 @@ def _format_entries_for_tool(items: list[dict]) -> str:
     return "\n".join(lines).strip()
 
 
-@lru_cache(maxsize=1)
+@functools.lru_cache(maxsize=1)
 def get_narrative() -> str:
     """读取当前记忆叙事，不存在则返回空字符串。"""
     if not MEMORY_PATH.exists():
         return ""
     from api.memory.manager import MemoryManagerBuilder, YamlMemoryManager  # noqa: PLC0415 — 避免循环导入
 
-    mm = MemoryManagerBuilder().with_backend(YamlMemoryManager, yaml_file=str(MEMORY_PATH)).build()
+    mm = MemoryManagerBuilder().with_backend(YamlMemoryManager).with_args(yaml_file=str(MEMORY_PATH)).build()
     return _format_narrative(mm.show())
 
 
-def _format_messages(messages: list[dict]) -> str:
+def _format_messages(messages: list[dict[str, str]]) -> str:
     """将消息列表格式化为可读文本，过滤掉工具输出避免幻觉。"""
     lines = []
     for m in messages:
@@ -163,7 +163,18 @@ def _format_messages(messages: list[dict]) -> str:
 # ── CRUD 工具（模块级 @tool，委托给 _current_mm）─────────────────
 
 
+def _require_mm(func):
+    """装饰器：确保 _current_mm 已初始化，否则返回错误消息。"""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        if _current_mm is None:
+            return "错误：记忆管理器未初始化。"
+        return func(*args, **kwargs)
+    return wrapper
+
+
 @tool
+@_require_mm
 def create_memory(content: str, section: str) -> str:
     """添加一条新的记忆条目到指定分区。调用后返回该条目的唯一 ID。
 
@@ -183,24 +194,22 @@ def create_memory(content: str, section: str) -> str:
             f"驳回：记忆内容超过 {MAX_DESC_LENGTH} 字限制（当前 {len(content)} 字），"
             f"请精简至 {MAX_DESC_LENGTH} 字以内，避免列举；或拆分为多条独立条目。"
         )
-    if _current_mm is None:
-        return "错误：记忆管理器未初始化。"
     new_id = _current_mm.add(description=content, theme=section)
     return f"已创建 [{new_id}] ({section}): {content}"
 
 
 @tool
+@_require_mm
 def read_memories() -> str:
     """查看当前所有记忆条目及其 ID 和分区。在增删改之前必须先调用此工具了解现有条目。"""
-    if _current_mm is None:
-        return "（暂无记忆条目）"
     result = _format_entries_for_tool(_current_mm.show())
     return result
 
 
 @tool
+@_require_mm
 def update_memory(id: str, content: str, reason: str) -> str:
-    """根据 ID 更新一条已有记忆。
+    """根据 ID 更新一条已有记忆。更新成功后会自动增加该记忆的引用计数（hit），表示该记忆被重新关注。
 
     Args:
         id: 要更新的记忆 ID（来自 read_memories 的输出）。
@@ -213,16 +222,16 @@ def update_memory(id: str, content: str, reason: str) -> str:
             f"驳回：更新后的记忆内容超过 {MAX_DESC_LENGTH} 字限制（当前 {len(content)} 字），"
             f"请精简至 {MAX_DESC_LENGTH} 字以内，避免列举；或拆分为多条独立条目。"
         )
-    if _current_mm is None:
-        return "错误：记忆管理器未初始化。"
     try:
         _current_mm.update(id, reason=reason, new_description=content)
+        new_hit = _current_mm.hit(id)
     except ValueError:
         return f"错误：未找到 ID 为 {id} 的记忆条目。请先调用 read_memories 确认 ID。"
-    return f"已更新 [{id}]: {content}"
+    return f"已更新 [{id}]: {content}（hit {new_hit}）"
 
 
 @tool
+@_require_mm
 def delete_memory(id: str, reason: str) -> str:
     """根据 ID 删除一条记忆。
 
@@ -230,8 +239,6 @@ def delete_memory(id: str, reason: str) -> str:
         id: 要删除的记忆 ID（来自 read_memories 的输出）。
         reason: 删除原因，说明为什么要删除这条记忆。
     """
-    if _current_mm is None:
-        return "错误：记忆管理器未初始化。"
     try:
         removed = _current_mm.delete(id)
     except ValueError:
@@ -240,6 +247,7 @@ def delete_memory(id: str, reason: str) -> str:
 
 
 @tool
+@_require_mm
 def merge_memories(id1: str, id2: str, content: str, section: str, reason: str) -> str:
     """将两条相似记忆合并为一条，id1 保留、id2 被删除，同时保留两者的修改历史。
 
@@ -258,8 +266,6 @@ def merge_memories(id1: str, id2: str, content: str, section: str, reason: str) 
             f"驳回：合并后的记忆内容超过 {MAX_DESC_LENGTH} 字限制（当前 {len(content)} 字），"
             f"请精简至 {MAX_DESC_LENGTH} 字以内，避免列举；或保留两条各自独立。"
         )
-    if _current_mm is None:
-        return "错误：记忆管理器未初始化。"
     try:
         _current_mm.merge(id1, id2, content, section, reason)
     except ValueError:
@@ -267,7 +273,24 @@ def merge_memories(id1: str, id2: str, content: str, section: str, reason: str) 
     return f"已合并 [{id2}] → [{id1}] ({section}): {content}"
 
 
-# ── LongTermMemory ──────────────────────────────────────────────
+@tool
+@_require_mm
+def hit_memory(id: str) -> str:
+    """标记一条记忆被引用/点击一次，增加其 hit 计数。
+
+    当记忆被引用（如被用于回答用户问题或被关联到对话）且没有对被引用记忆进行Update时调用此工具标记。
+
+    Args:
+        id: 要标记的记忆 ID（来自 read_memories 的输出）。
+    """
+    try:
+        new_count = _current_mm.hit(id)
+    except ValueError:
+        return f"错误：未找到 ID 为 {id} 的记忆条目。请先调用 read_memories 确认 ID。"
+    return f"已标记记忆 [{id}]，累计点击 {new_count} 次"
+
+
+# ── LongTermMemory ──────────────────────────────────────────
 
 
 class LongTermMemory:
@@ -278,7 +301,7 @@ class LongTermMemory:
         from api.memory.manager import MemoryManagerBuilder, YamlMemoryManager
 
         ltm = LongTermMemory(MemoryManagerBuilder()
-            .with_backend(YamlMemoryManager, yaml_file="path/to/memory.yaml")
+            .with_backend(YamlMemoryManager).with_args(yaml_file="path/to/memory.yaml")
             .build())
         ltm.start_listening()              # 启动后台消费者
         await ltm.send_history(messages)  # 投放本轮对话（非阻塞）
@@ -497,6 +520,7 @@ class LongTermMemory:
                     update_memory,
                     delete_memory,
                     merge_memories,
+                    hit_memory,
                 ]
 
                 agent = create_agent(
