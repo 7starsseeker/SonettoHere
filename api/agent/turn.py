@@ -55,11 +55,13 @@ class _TurnContext:
         agent:         编译后的 LangGraph Agent (Sonetto)
         inputs:        本轮输入消息字典（含 HumanMessage 列表）
         config:        运行配置（thread_id、callbacks、recursion_limit）
+        turn_id:       本轮唯一标识（UUID hex），用于关联记忆事件
     """
     system_prompt: str
     agent: Sonetto
     inputs: dict[str, list[HumanMessage]]
     config: dict[str, Any]
+    turn_id: str
 
 
 @dataclass
@@ -68,11 +70,9 @@ class _TurnResult:
 
     Attributes:
         final_answer: Agent 产出的最终文本回答（空串表示无回答）
-        turn_id:      本轮唯一标识（UUID hex），用于关联记忆事件
         error:        执行过程中抛出的异常信息；成功时为 None
     """
     final_answer: str
-    turn_id: str
     error: str | None
 
 
@@ -264,6 +264,9 @@ async def _build_turn_context(
     user_message: str,
     image_recognition: bool,
     image_refs: list[str] | None,
+    ltm: Any | None = None,
+    private_mode: bool = False,
+    skip_recall: bool = False,
 ) -> _TurnContext:
     """构建 Agent 图、输入消息和执行配置。"""
     system_prompt = build_system_prompt()
@@ -275,6 +278,7 @@ async def _build_turn_context(
         tools=tools,
         system_prompt=system_prompt,
         checkpointer=get_checkpointer(),
+        ltm=ltm,
     )
     session.set_graph(agent)
 
@@ -298,13 +302,23 @@ async def _build_turn_context(
     else:
         inputs = {"messages": [HumanMessage(content=user_message)]}
 
+    turn_id = uuid.uuid4().hex
+
     config = {
-        "configurable": {"thread_id": session.session_id},
+        "configurable": {
+            "thread_id": session.session_id,
+            "private_mode": private_mode,
+            "skip_recall": skip_recall,
+            "turn_id": turn_id,
+        },
         "callbacks": [ws_callback],
         "recursion_limit": 120,
     }
 
-    return _TurnContext(system_prompt=system_prompt, agent=agent, inputs=inputs, config=config)
+    return _TurnContext(
+        system_prompt=system_prompt, agent=agent,
+        inputs=inputs, config=config, turn_id=turn_id,
+    )
 
 
 # ── 阶段 3：执行轮次 ──────────────────────────────────────
@@ -319,7 +333,6 @@ async def _execute_agent_turn(
     """流式执行 Agent 轮次，处理取消与异常，返回结果。"""
     final_answer = ""
     error: str | None = None
-    turn_id = ""
 
     try:
         # 推送初始上下文用量（含刚加入的 user message）
@@ -355,30 +368,24 @@ async def _execute_agent_turn(
             session, ctx.system_prompt,
             max_tokens=llm_conf.max_tokens, model_name=llm_conf.model_name,
         )
-        turn_id = uuid.uuid4().hex
-        await sender.done(turn_id, context_usage)
+        await sender.done(ctx.turn_id, context_usage)
 
-    return _TurnResult(final_answer=final_answer, turn_id=turn_id, error=error)
+    return _TurnResult(final_answer=final_answer, error=error)
 
 
 # ── 阶段 4：后处理 ────────────────────────────────────────
 
 
 async def _postprocess_turn(
-    ltm: Any,
     session: SessionState,
     result: _TurnResult,
-    user_message: str,
-    private_mode: bool,
 ) -> None:
-    """后处理：消息计数、长期记忆持久化、Const 会话保存、Sub-agent 结果回调。"""
+    """后处理：消息计数、Const 会话保存、Sub-agent 结果回调。
+
+    LTM 持久化已移至图内 ``ltm_write`` 节点，不再在此处调用。
+    """
     if result.final_answer:
         session.increment_messages()
-
-    if not private_mode:
-        await ltm.send_history_from_session(
-            session, turn_id=result.turn_id, user_message=user_message, final_answer=result.final_answer,
-        )
 
     # Const 会话持久化
     if result.final_answer and session.is_const:
@@ -414,6 +421,7 @@ async def run_agent_turn(
     session: SessionState,
     user_message: str,
     private_mode: bool = False,
+    skip_recall: bool = False,
     provider_id: str | None = None,
     model_name: str | None = None,
     image_recognition: bool = False,
@@ -453,16 +461,16 @@ async def run_agent_turn(
         user_message=user_message,
         image_recognition=image_recognition,
         image_refs=image_refs,
+        ltm=app_state.ltm,
+        private_mode=private_mode,
+        skip_recall=skip_recall,
     )
 
     # 3. 执行轮次
     result: _TurnResult = await _execute_agent_turn(ctx, sender, session, llm_conf)
 
-    # 4. 后处理
+    # 4. 后处理（LTM 持久化已在图内 ltm_write 节点中完成）
     await _postprocess_turn(
-        ltm=app_state.ltm,
         session=session,
         result=result,
-        user_message=user_message,
-        private_mode=private_mode,
     )

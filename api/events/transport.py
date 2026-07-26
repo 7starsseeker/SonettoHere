@@ -20,6 +20,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# 模块级 WS 锁映射：(id(ws), id(loop)) → asyncio.Lock
+# 之所以用二元组作 key，是因为 LangChain 内部有时会创建临时事件循环来调度
+# async callback（如 MemoryToolCallback），导致 callback 中的 _send() 与
+# 主循环共用同一把锁 → "bound to a different event loop" 错误。
+# 按 (ws, loop) 各自持锁，彻底隔离不同循环的锁竞争。
+_ws_locks: dict[tuple[int, int], asyncio.Lock] = {}
+
+
+def _cleanup_ws_locks(ws_id: int) -> None:
+    """断开时清理所有涉及给定 ws 的锁条目。"""
+    for key in list(_ws_locks.keys()):
+        if key[0] == ws_id:
+            _ws_locks.pop(key, None)
+
 
 class WsTransport:
     """WebSocket 传输基类。
@@ -29,13 +43,14 @@ class WsTransport:
 
         async def answer(self, content: str) -> None:
             await self._send("answer", {"content": content})
+
+    线程安全性：本类通过模块级 ``_ws_locks`` 字典实现按 WebSocket 实例
+    粒度的锁，确保所有共享同一 ws 连接的 Sender 实例并发调用 _send() 时
+    不会交错写入。锁在 _send() 首次调用时按需创建，绑定调用时的事件循环。
     """
 
     def __init__(self, ws: WebSocket | None) -> None:
         self._ws = ws
-        # 延迟初始化锁，确保锁在 _send() 调用的事件循环中创建，
-        # 避免 LTM 后台 consumer 等场景下锁绑定到错误的事件循环。
-        self._write_lock: asyncio.Lock | None = None
 
     # ── 工厂方法 ─────────────────────────────────────────────
 
@@ -91,12 +106,17 @@ class WsTransport:
         if self._ws is None:
             return
 
-        # 延迟创建锁，确保绑定到 _send 调用时的事件循环
-        if self._write_lock is None:
-            self._write_lock = asyncio.Lock()
+        # 按 (ws, loop) 获取锁，不同循环各自隔离，避免 LangChain 临时
+        # 事件循环与主循环共用锁导致的 "bound to a different event loop"。
+        ws_id = id(self._ws)
+        loop_id = id(asyncio.get_running_loop())
+        key = (ws_id, loop_id)
+        if key not in _ws_locks:
+            _ws_locks[key] = asyncio.Lock()
 
-        async with self._write_lock:
+        async with _ws_locks[key]:
             try:
                 await self._ws.send_json({"type": event_type, "payload": payload})
             except WebSocketDisconnect:
                 self._ws = None
+                _cleanup_ws_locks(ws_id)

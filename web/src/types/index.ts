@@ -128,6 +128,21 @@ export interface MemoryDoneEvent {
   }
 }
 
+/** memory_search_start — 前端语义记忆搜索开始 */
+export interface MemorySearchStartEvent {
+  type: 'memory_search_start'
+  payload: Record<string, never>
+}
+
+/** memory_search_done — 前端语义记忆搜索完成 */
+export interface MemorySearchDoneEvent {
+  type: 'memory_search_done'
+  payload: {
+    total: number
+    fresh: number
+  }
+}
+
 export type ServerEvent =
   | ThinkingStartEvent
   | TokenEvent
@@ -147,6 +162,8 @@ export type ServerEvent =
   | MemoryToolEndEvent
   | MemoryToolErrorEvent
   | MemoryDoneEvent
+  | MemorySearchStartEvent
+  | MemorySearchDoneEvent
 
 // === WebSocket 客户端 → 服务端消息 ===
 
@@ -155,6 +172,7 @@ export interface ChatMessage {
   payload: {
     message: string
     private?: boolean
+    skip_recall?: boolean
     auto_approve?: boolean
     provider_id?: string
     model_name?: string
@@ -249,6 +267,8 @@ export interface ChatTurn {
   finalAnswer: string | null
   /** 后端生成的 turn_id，用于关联后台记忆 consumer 的事件 */
   turnId?: string
+  /** 当前轮的语义记忆搜索结果 */
+  memorySearch?: { status: 'searching' } | { status: 'done'; total: number; fresh: number }
 }
 
 // === 会话与 API 类型 ===

@@ -9,6 +9,7 @@ import functools
 from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langchain.agents import create_agent
@@ -17,6 +18,7 @@ from api.events import MemorySender
 from api.memory.callback import MemoryToolCallback
 from api.memory.manager import BaseMemoryManager
 from api.memory.manager import MAX_DESC_LENGTH
+from api.memory.retriever import MechanicalRetriever, RetrievalMode
 from api.providers.default_llm import get_default_llm
 from api.session.manager import SessionState, session_manager
 
@@ -24,6 +26,10 @@ from api.session.manager import SessionState, session_manager
 def _sanitize(text: str) -> str:
     """将多行文本折叠为单行，防止破坏 YAML 格式。"""
     return text.replace("\n", " ").replace("\r", " ")
+
+
+# 记忆注入标记 — retrieve_memory 节点注入的 HumanMessage 以此开头
+MEMORY_INJECTION_MARKER = "【相关记忆】"
 
 
 PERSONAS_DIR = Path(__file__).resolve().parent.parent.parent / "config" / "personas"
@@ -313,6 +319,7 @@ class LongTermMemory:
         memory_manager: BaseMemoryManager,
     ) -> None:
         self._mm = memory_manager
+        self._retriever: MechanicalRetriever | None = None
         self._queue: asyncio.Queue | None = None
         self._consumer_task: asyncio.Task | None = None
 
@@ -328,33 +335,65 @@ class LongTermMemory:
             return ""
         return _format_narrative(items)
 
-    def get_related_memory_from(self, prompt: str) -> list[str]:
-        """根据查询要求从记忆库中找出语义相关的条目并返回其描述文本。"""
+    def get_related_memory_from(
+        self, prompt: str, mode: RetrievalMode = RetrievalMode.LLM
+    ) -> list[dict[str, str]]:
+        """根据查询提示检索相关记忆条目。
+
+        通过 ``mode`` 参数选择检索策略：
+
+        - ``RetrievalMode.LLM`` → :meth:`_retrieve_llm`（LLM 语义检索）
+        - ``RetrievalMode.MECHANICAL`` → :meth:`_retrieve_mechanical`（BM25 机械检索）
+
+        两种路径的返回格式均为 ``[{id, description, theme}, ...]``。
+
+        Args:
+            prompt: 用户查询文本。
+            mode: 检索模式，默认 LLM 语义检索。
+        """
+        if mode == RetrievalMode.MECHANICAL:
+            return self._retrieve_mechanical(prompt)
+        return self._retrieve_llm(prompt)
+
+    def _retrieve_llm(self, prompt: str) -> list[dict[str, str]]:
+        """LLM 语义检索：将全量记忆注入 LLM，由 LLM 判断相关条目。"""
         if get_default_llm() is None:
             return []
         items = self._mm.show()
         if not items:
             return []
 
-        # 格式化为带列表序号（而非内部 hex ID）的编号列表，供 LLM 引用
+        # 格式化为带列表序号的编号列表，供 LLM 引用
         lines = []
         for i, item in enumerate(items):
             lines.append(f"[{i}] ({item['theme']}) {item['description']}")
         memory_text = "\n".join(lines)
         user_prompt = f"## 记忆库\n{memory_text}\n\n## 查询要求\n{prompt}"
 
-        response = get_default_llm().invoke([
-            SystemMessage(content=FIND_RELATED_MEMORY.strip()),
-            HumanMessage(content=user_prompt),
-        ])
+        response = get_default_llm().invoke(
+            [SystemMessage(content=FIND_RELATED_MEMORY.strip()), HumanMessage(content=user_prompt)],
+            config=RunnableConfig(callbacks=[]),
+        )
 
         try:
             indices = json.loads(response.content)
             if isinstance(indices, list):
-                return [items[i]["description"] for i in indices if 0 <= i < len(items)]
+                return [
+                    {"id": items[i]["id"], "description": items[i]["description"], "theme": items[i]["theme"]}
+                    for i in indices if 0 <= i < len(items)
+                ]
         except (json.JSONDecodeError, TypeError, IndexError):
             pass
         return []
+
+    def _retrieve_mechanical(self, prompt: str) -> list[dict[str, str]]:
+        """BM25 机械检索：零 LLM 调用，毫秒级匹配。"""
+        if self._retriever is None:
+            self._retriever = MechanicalRetriever()
+            self._retriever.build_index(self._mm.show())
+        elif self._retriever.dirty:
+            self._retriever.build_index(self._mm.show())
+        return self._retriever.get_related_memory_from(prompt)
 
     def delete_memory(self, id: str) -> str:
         """删除指定 ID 的单条记忆，返回被删除条目的描述。"""
@@ -405,7 +444,12 @@ class LongTermMemory:
 
     @staticmethod
     async def _extract_session_messages(session: SessionState) -> list[dict[str, str]]:
-        """从短期记忆提取全量会话消息并映射为记忆 Agent 格式。"""
+        """从短期记忆提取全量会话消息并映射为记忆 Agent 格式。
+
+        自动跳过以 :data:`MEMORY_INJECTION_MARKER` 开头的 HumanMessage
+        （即 retrieve_memory 节点注入的【相关记忆】），避免 LTM consumer
+        将记忆注入内容当作真实用户对话写入 memory.yaml。
+        """
         try:
             raw = await session.get_messages()
             if not raw:
@@ -416,6 +460,13 @@ class LongTermMemory:
         role_map = {"human": "user", "ai": "assistant", "tool": "tool"}
         result: list[dict[str, str]] = []
         for m in raw:
+            # 跳过注入的记忆 HumanMessage
+            if (
+                m.type == "human"
+                and isinstance(m.content, str)
+                and m.content.startswith(MEMORY_INJECTION_MARKER)
+            ):
+                continue
             role = role_map.get(m.type)
             if role is None:
                 continue

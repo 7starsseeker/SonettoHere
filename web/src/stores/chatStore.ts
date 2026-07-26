@@ -64,6 +64,7 @@ export interface SessionChannel {
   _awaitingToolName: string | null
   parentSessionId: string | null
   privateMode: boolean
+  skipRecall: boolean
   autoApprove: boolean
 }
 
@@ -101,6 +102,7 @@ export const useChatStore = defineStore('chat', () => {
         _awaitingToolName: null,
         parentSessionId: null,
         privateMode: false,
+        skipRecall: false,
         autoApprove: false,
       })
     }
@@ -201,6 +203,18 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
 
+    // 语义记忆搜索事件：直接更新 currentTurn
+    if (event.type === 'memory_search_start') {
+      if (ch.currentTurn) ch.currentTurn.memorySearch = { status: 'searching' }
+      return
+    }
+    if (event.type === 'memory_search_done') {
+      if (ch.currentTurn) {
+        ch.currentTurn.memorySearch = { status: 'done', total: event.payload.total, fresh: event.payload.fresh }
+      }
+      return
+    }
+
     const memoryHandler = memoryHandlers.get(event.type as MemoryEventType)
     if (typeof memoryHandler === 'function') {
       memoryHandler(ch, sid, event)
@@ -274,6 +288,7 @@ export const useChatStore = defineStore('chat', () => {
       payload: {
         message: flatMsg,
         private: ch.privateMode,
+        skip_recall: ch.skipRecall,
         auto_approve: ch.autoApprove,
         provider_id: providerId,
         model_name: modelName,
