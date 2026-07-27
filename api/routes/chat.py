@@ -16,8 +16,10 @@ from api.events import ChatSender
 from api.providers import FALLBACK_CTX
 from api.providers.manager import get_manager
 from api.session.manager import SessionState, session_manager
+from api.utils.logger import get_logger
 
 router = APIRouter()
+_log = get_logger("chat")
 
 Handler = Callable[[WebSocket, str, SessionState, asyncio.Task | None, dict], Awaitable[asyncio.Task | None]]
 
@@ -155,13 +157,13 @@ async def _handle_update_auto_approve(
 async def websocket_chat(ws: WebSocket, session_id: str) -> None:
     """WebSocket 聊天端点 — 接收消息、派发、生命周期管理。"""
     await ws.accept()
-    print(f"[chat] WebSocket 已连接: session_id={session_id}")
+    _log.debug("WebSocket 已连接: session_id=%s", session_id)
 
     # ── 初始化会话 ────────────────────────────────────────
     session = session_manager.get_or_create(session_id)
-    print(f"[chat] 会话状态: id={session_id}, is_const={session.is_const}, "
-          f"const_name={session.const_name!r}, message_count={session.message_count}, "
-          f"has_active_task={session.has_active_task()}")
+    _log.debug("会话状态: id=%s, is_const=%s, const_name=%r, message_count=%d, has_active_task=%s",
+               session_id, session.is_const, session.const_name, session.message_count,
+               session.has_active_task())
     session.ws = ws  # 供后台记忆 consumer 推送事件
     interaction.current_ws.set(ws)  # 供 ChatSender/TurnSender/CallbackSender 使用
 
@@ -185,7 +187,7 @@ async def websocket_chat(ws: WebSocket, session_id: str) -> None:
             raw = await ws.receive_text()
             msg = json.loads(raw)
             msg_type = msg.get("type", "")
-            print(f"[chat] 收到消息: session_id={session_id}, type={msg_type}")
+            _log.debug("收到消息: session_id=%s, type=%s", session_id, msg_type)
 
             handler = _HANDLERS.get(msg_type)
             if handler is not None:
@@ -193,13 +195,14 @@ async def websocket_chat(ws: WebSocket, session_id: str) -> None:
                     ws, session_id, session, agent_task, msg
                 )
             else:
-                print(f"[chat] 未知消息类型: {msg_type}")
+                _log.debug("未知消息类型: %s", msg_type)
 
     except WebSocketDisconnect:
-        print(f"[chat] WebSocket 断开: session_id={session_id}")
+        _log.debug("WebSocket 断开: session_id=%s", session_id)
     finally:
         session.ws = None
-        print(f"[chat] 清理会话: session_id={session_id}, agent_task_done={agent_task is not None and agent_task.done()}")
+        _log.debug("清理会话: session_id=%s, agent_task_done=%s",
+                   session_id, agent_task is not None and agent_task.done())
         if agent_task is not None and not agent_task.done():
             agent_task.cancel()
         session.clear_active_task()
