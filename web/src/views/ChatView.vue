@@ -32,7 +32,7 @@
           </span>
         </div>
         <ContextUsageBadge :usage="contextUsage" :selected-model="selectedModelName" :has-vision="selectedModelHasVision" />
-        <TaskTrackerBar :data="taskTrackerData as any" />
+        <TaskTrackerBar :data="taskTrackerData as any" @dismiss="dismissTaskTracker" />
     </header>
 
     <ChatWindow
@@ -63,8 +63,25 @@
       @toggle-auto-approve="setAutoApprove(!autoApprove)"
       @toggle-image-recognition="imageRecognition = !imageRecognition"
     />
-    <div v-else class="sub-agent-readonly-bar">
-      <span class="sub-agent-readonly-text">🔒 子 Agent 会话 — 只读</span>
+    <div v-else class="sub-agent-bar-wrapper">
+      <div class="sub-agent-bar">
+        <div class="sub-agent-bar-left">
+          <button
+            class="sub-agent-btn-check"
+            :class="{ active: autoApprove }"
+            :title="autoApprove ? '自动执行：Python 代码将直接执行' : '审核模式：代码执行前需确认'"
+            @click="setAutoApprove(!autoApprove)"
+          >
+            <Icon name="code" :size="14" />
+          </button>
+          <span class="sub-agent-task" :title="currentTurn?.userMessage">
+            {{ taskPreview }}
+          </span>
+        </div>
+        <div class="sub-agent-bar-right">
+          <span class="sub-agent-meta">#{{ sessionId?.slice(0, 8) }}</span>
+        </div>
+      </div>
     </div>
     </template>
   </div>
@@ -74,10 +91,12 @@
 import { api } from '@/api'
 import ChatInput from '@/components/ChatInput.vue'
 import ChatWindow from '@/components/ChatWindow.vue'
+import Icon from '@/components/Icon.vue'
 import ContextUsageBadge from '@/components/ContextUsageBadge.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import TaskTrackerBar from '@/components/TaskTrackerBar.vue'
 import { useChat } from '@/composables/useChat'
+import { useChatStore } from '@/stores/chatStore'
 import { health } from '@/composables/useHealth'
 import { useSession } from '@/composables/useSession'
 import type { ParsedRef } from '@/utils/references'
@@ -87,6 +106,12 @@ import { computed, onMounted, ref } from 'vue'
 const { sessionId, sessions } = useSession()
 const { connected, isStreaming, turns, currentTurn, error, contextUsage, taskTrackerData, send, cancel, sendUserResponse, removeTurns, privateMode, setPrivateMode, skipRecall, setSkipRecall, autoApprove, setAutoApprove } =
   useChat(sessionId)
+const chatStore = useChatStore()
+
+function dismissTaskTracker() {
+  const ch = chatStore.getOrCreateChannel(sessionId.value)
+  ch.taskTrackerData = null
+}
 
 const selectedModelName = ref('')
 const selectedProviderId = ref('')
@@ -119,6 +144,12 @@ const selectedModelHasVision = computed(() => {
   if (!selectedProviderId.value || !selectedModelName.value) return false
   const provider = providers.value.find(p => p.id === selectedProviderId.value)
   return provider?.model_vision?.[selectedModelName.value] === true
+})
+
+const taskPreview = computed(() => {
+  const msg = currentTurn.value?.userMessage
+  if (!msg) return '子 Agent 执行中…'
+  return msg.length > 60 ? msg.slice(0, 60) + '…' : msg
 })
 
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
@@ -167,17 +198,73 @@ async function handleUndo() {
   border-bottom: 1px solid var(--border);
   background: var(--bg-card);
 }
-.sub-agent-readonly-bar {
+.sub-agent-bar-wrapper {
+  padding: 6px 24px 8px;
+  background: var(--bg-card);
+}
+.sub-agent-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 768px;
+  margin: 0 auto;
+  padding: 5px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-soft);
+  gap: 8px;
+}
+.sub-agent-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.sub-agent-btn-check {
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 10px 24px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-secondary);
+  transition: all 0.15s;
+  padding: 0;
+  font-family: inherit;
+  flex-shrink: 0;
 }
-.sub-agent-readonly-text {
+.sub-agent-btn-check:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+.sub-agent-btn-check.active {
+  background: color-mix(in srgb, #81ae92 12%, transparent);
+  color: #81ae92;
+  box-shadow: 0 0 0 1px color-mix(in srgb, #81ae92 30%, transparent);
+}
+.sub-agent-task {
   font-size: 12px;
   color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+.sub-agent-bar-right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.sub-agent-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: monospace;
+  letter-spacing: 0.3px;
 }
 
 /* ── 无提供商引导 ── */
