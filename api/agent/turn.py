@@ -2,6 +2,8 @@
 
 import asyncio
 import base64
+import datetime
+import re
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -18,7 +20,7 @@ from api.providers.manager import get_manager
 from api.providers.default_llm import get_default_llm
 from api.providers.manager import ProviderManager
 from api.session.const_store import save_const_session, serialize_messages
-from api.session.manager import SessionState
+from api.session.manager import PendingMessage, SessionState
 from api.memory.short_term import get_checkpointer
 from langchain_core.language_models.chat_models import BaseChatModel
 from tools.base import format_error
@@ -96,6 +98,45 @@ def _get_final_answer(event: dict[str, Any]) -> str:
         else str(raw_final_answer)
     )
     return final_answer
+
+
+# ── 排队消息合并 ──────────────────────────────────────────
+
+# 消息尾部时间标记（与前端 web/src/utils/references.ts TIME_SUFFIX_RE 一致）
+_TIME_SUFFIX_RE = re.compile(r"（\d{4}-\d{2}-\d{2} \w{3} \d{2}:\d{2}）$")
+
+
+def _strip_time_suffix(text: str) -> str:
+    """剥离消息尾部的时间标记（如「（2026-07-29 Wed 14:30）」。"""
+    return _TIME_SUFFIX_RE.sub("", text).rstrip()
+
+
+def now_timestamp() -> str:
+    """当前服务器时间尾缀，如（2026-07-31 Fri 10:24）。
+
+    时间戳是必须进入 LLM 上下文的输入数据（Agent 需感知当前时间以回答
+    时间相关查询），由后端统一生成，前端不再拼接。
+    """
+    now = datetime.datetime.now()
+    wd = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][now.weekday()]
+    return f"（{now.year:04d}-{now.month:02d}-{now.day:02d} {wd} {now.hour:02d}:{now.minute:02d}）"
+
+
+def merge_pending_batch(batch: list[PendingMessage]) -> tuple[str, bool, list[str] | None]:
+    """将一批排队消息合并为单个 Agent 输入（合并处理语义）。
+
+    返回 ``(text, image_recognition, image_refs)``：
+    - 文本以空行（\\n\\n）连接（消息文本已不含时间戳，时间戳由注入侧统一追加）；
+    - 图片标记 OR 累积——任一消息启用图像认知则整体启用，路径全部合并。
+    """
+    text = "\n\n".join(_strip_time_suffix(p.text) for p in batch)
+    images = [
+        img
+        for p in batch
+        if p.image_recognition
+        for img in (p.image_refs or [])
+    ]
+    return text, bool(images), images or None
 
 
 async def _inject_cancel_tool_messages(session: SessionState, config: dict[str, Any], sender: TurnSender) -> None:
@@ -190,7 +231,11 @@ async def _stream_turn(
     model_name: str | None = None,
     max_tokens: int = 256_000,
 ) -> str:
-    """流式执行 Agent 图，返回最终回答。"""
+    """流式执行 Agent 图，返回最终回答。
+
+    图的逐轮 answer/done/pending_consumed 事件由轮末查询点（check_pending）
+    在节点内按序推送（顺序确定）；此处仅消费流式事件、提取最终回答。
+    """
     final_answer = ""
     async for event in graph.astream_events(inputs, config=config, version="v2"):
         if event.get("event") == "on_chain_end" and event.get("name") == "agent":
@@ -282,8 +327,11 @@ async def _build_turn_context(
     session.set_graph(agent)
 
     # 多模态输入
+    # 时间戳由后端统一追加并进入 LLM 上下文（Agent 需感知当前时间）
+    timestamped = user_message + now_timestamp()
+
     if image_recognition and image_refs:
-        content_parts: list[dict] = [{"type": "text", "text": user_message}]
+        content_parts: list[dict] = [{"type": "text", "text": timestamped}]
         for img_path in image_refs:
             if not img_path.strip():
                 continue
@@ -299,7 +347,7 @@ async def _build_turn_context(
                 continue
         inputs = {"messages": [HumanMessage(content=content_parts)]}
     else:
-        inputs = {"messages": [HumanMessage(content=user_message)]}
+        inputs = {"messages": [HumanMessage(content=timestamped)]}
 
     turn_id = uuid.uuid4().hex
 
@@ -309,6 +357,10 @@ async def _build_turn_context(
             "private_mode": private_mode,
             "skip_recall": skip_recall,
             "turn_id": turn_id,
+            # 供图内 check_pending 计算逐轮上下文用量（answer/done 事件）
+            "system_prompt": system_prompt,
+            "model_name": llm_conf.model_name,
+            "max_tokens": llm_conf.max_tokens,
         },
         "callbacks": [ws_callback],
         "recursion_limit": 120,
@@ -341,11 +393,11 @@ async def _execute_agent_turn(
         )
         await sender.context_usage(initial_usage)
 
+        # 逐轮 answer/done 已由图内 check_pending 节点按序推送
         final_answer = await _stream_turn(
             ctx.agent, ctx.inputs, ctx.config, sender, session,
             ctx.system_prompt, model_name=llm_conf.model_name, max_tokens=llm_conf.max_tokens,
         )
-        await sender.answer(final_answer)
 
     except asyncio.CancelledError:
         interaction.cancel_all()
@@ -361,7 +413,8 @@ async def _execute_agent_turn(
         await sender.error("AGENT_ERROR", str(e))
 
     finally:
-        session.clear_active_task()
+        # 兜底 done：若最后一轮未达 ltm_write（异常/取消中断）则补发收尾；
+        # 正常完成时前端 currentTurn 已为 null，重复 done 被前端静默忽略。
         context_usage = await estimate_context_usage_from_session(
             session, ctx.system_prompt,
             max_tokens=llm_conf.max_tokens, model_name=llm_conf.model_name,
@@ -378,13 +431,11 @@ async def _postprocess_turn(
     session: SessionState,
     result: _TurnResult,
 ) -> None:
-    """后处理：消息计数、Const 会话保存、Sub-agent 结果回调。
+    """后处理：Const 会话保存、Sub-agent 结果回调。
 
-    LTM 持久化已移至图内 ``ltm_write`` 节点，不再在此处调用。
+    LTM 持久化已移至图内 ``ltm_write`` 节点；
+    消息计数已移至图内 ``check_pending`` 节点（逐轮计数）。
     """
-    if result.final_answer:
-        session.increment_messages()
-
     # Const 会话持久化
     if result.final_answer and session.is_const:
         try:
@@ -424,14 +475,23 @@ async def run_agent_turn(
     model_name: str | None = None,
     image_recognition: bool = False,
     image_refs: list[str] | None = None,
+    queued_pending: list[PendingMessage] | None = None,
 ):
-    """编排一轮 Agent 对话。
+    """编排一次 Agent 图执行（单次调用）。
+
+    排队消息的注入与下一轮编排全部在图内完成——工具间隙注入（inject_pending）
+    与轮末查询点（check_pending）负责队列消费，本函数不再循环驱动。
 
     分 4 个阶段执行：
       1. _resolve_llm        — 解析 LLM 与上下文窗口配置
       2. _build_turn_context  — 构建 Agent 图、多模态输入与运行配置
-      3. _execute_agent_turn  — 流式执行、异常/取消处理
-      4. _postprocess_turn    — 消息计数、记忆持久化、Const 保存、Sub-agent 回调
+      3. _execute_agent_turn  — 流式执行、逐轮 answer/done、异常/取消处理
+      4. _postprocess_turn    — Const 保存、Sub-agent 回调
+
+    Args:
+        queued_pending: 随首轮一起被消费的排队消息列表（_start_turn_from_ws
+            合并残留队列时非空），此时需先发 ``pending_consumed(new_turn)`` 让前端
+            创建 currentTurn。普通发送为 ``None``。
     """
     # Sub-agent 跳过长期记忆的读（retrieve_memory）和写（ltm_write）
     if session.is_subagent:
@@ -442,38 +502,50 @@ async def run_agent_turn(
     app_state = ws.app.state
     sender = TurnSender.from_context()
 
-    # 1. 解析 LLM 配置
-    llm_conf: _LlmConfig = _resolve_llm(
-        provider_manager=get_manager(),
-        default_llm=get_default_llm(),
-        provider_id=provider_id,
-        model_name=model_name,
-    )
-    if llm_conf is None:
-        await sender.error(
-            "NO_LLM",
-            "No LLM provider configured. Add one in Model Settings first.",
+    current_task = asyncio.current_task()
+    try:
+        # 1. 解析 LLM 配置
+        llm_conf: _LlmConfig = _resolve_llm(
+            provider_manager=get_manager(),
+            default_llm=get_default_llm(),
+            provider_id=provider_id,
+            model_name=model_name,
         )
-        return
+        if llm_conf is None:
+            await sender.error(
+                "NO_LLM",
+                "No LLM provider configured. Add one in Model Settings first.",
+            )
+            return
 
-    # 2. 构建执行上下文
-    ctx: _TurnContext = await _build_turn_context(
-        tools=app_state.tool_manager.get_all(multimodal=llm_conf.multimodal),
-        session=session,
-        llm_conf=llm_conf,
-        user_message=user_message,
-        image_recognition=image_recognition,
-        image_refs=image_refs,
-        ltm=app_state.ltm,
-        private_mode=private_mode,
-        skip_recall=skip_recall,
-    )
+        # 首轮若合并了排队消息（_start_turn_from_ws 传入），通知前端创建 currentTurn
+        if queued_pending:
+            await sender.pending_consumed(
+                [{"pending_id": p.pending_id, "text": p.text} for p in queued_pending],
+                mode="new_turn",
+                text=user_message,
+            )
 
-    # 3. 执行轮次
-    result: _TurnResult = await _execute_agent_turn(ctx, sender, session, llm_conf)
+        # 2. 构建执行上下文
+        ctx: _TurnContext = await _build_turn_context(
+            tools=app_state.tool_manager.get_all(multimodal=llm_conf.multimodal),
+            session=session,
+            llm_conf=llm_conf,
+            user_message=user_message,
+            image_recognition=image_recognition,
+            image_refs=image_refs,
+            ltm=app_state.ltm,
+            private_mode=private_mode,
+            skip_recall=skip_recall,
+        )
 
-    # 4. 后处理（LTM 持久化已在图内 ltm_write 节点中完成）
-    await _postprocess_turn(
-        session=session,
-        result=result,
-    )
+        # 3. 执行（图内完成全部轮次）
+        result: _TurnResult = await _execute_agent_turn(ctx, sender, session, llm_conf)
+
+        # 4. 后处理（消息计数已在图内 check_pending 节点完成）
+        await _postprocess_turn(
+            session=session,
+            result=result,
+        )
+    finally:
+        session.clear_active_task(current_task)
