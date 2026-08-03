@@ -20,7 +20,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-python setup.py
+python setup_guide.py
 if errorlevel 1 (
     echo.
     pause

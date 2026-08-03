@@ -26,7 +26,7 @@ cd SonettoHere
 ### 2. 一键初始化
 
 ```bash
-python setup.py
+python setup_guide.py
 ```
 
 或双击 `setup.bat`（推荐 Windows 用户）。
@@ -49,7 +49,7 @@ python setup.py
 推荐使用 **DeepSeek**（性价比高，兼容 OpenAI API）：
 
 1. 前往 [platform.deepseek.com](https://platform.deepseek.com/) 注册并申请 API Key
-2. 在 setup.py 第 5 步中输入：
+2. 在 setup_guide.py 第 5 步中输入：
 
 ```
 Base URL: https://api.deepseek.com/v1
