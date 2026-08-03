@@ -13,6 +13,7 @@
   python upgrade.py
 """
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +21,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent
 MIGRATIONS_DIR = PROJECT_ROOT / "scripts" / "migrations"
 APPLIED_PATH = MIGRATIONS_DIR / ".applied"
+# 记录"上次成功安装依赖时的 HEAD"，用于失败后重试（避免再次 upgrade 时
+# git pull 无变更导致依赖安装被跳过）
+DEPS_STATE_PATH = MIGRATIONS_DIR / ".deps_head"
 
 
 def _read_applied_file() -> list[str] | None:
@@ -97,9 +101,11 @@ def discover_pending_migrations(applied: list[str]) -> list[Path]:
 
 def run_script(script: Path) -> None:
     mig_id = script.stem
+    # 迁移脚本依赖项目依赖（如 yaml），必须用 .venv 的解释器执行。
+    python = _require_venv_python()
     print(f"[upgrade] 执行 {script.name} ...")
     result = subprocess.run(
-        [sys.executable, str(script)],
+        [str(python), str(script)],
         cwd=PROJECT_ROOT, capture_output=True, text=True,
     )
     if result.stdout:
@@ -140,47 +146,91 @@ def _get_changed_files(old_head: str) -> list[str]:
     return result.stdout.strip().splitlines() if result.stdout.strip() else []
 
 
-def _install_npm_dependencies() -> None:
-    """检测到 web/package.json 变更后，自动安装前端 npm 依赖。"""
+def _read_deps_head() -> str | None:
+    """读取上次成功安装依赖时的 HEAD。无记录返回 None。"""
+    if not DEPS_STATE_PATH.exists():
+        return None
+    content = DEPS_STATE_PATH.read_text(encoding="utf-8").strip()
+    return content or None
+
+
+def _write_deps_head(head: str) -> None:
+    """记录依赖已与指定 HEAD 对齐。"""
+    DEPS_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    DEPS_STATE_PATH.write_text(head + "\n", encoding="utf-8")
+
+
+def _venv_python() -> Path | None:
+    """返回项目 .venv 中的 Python 解释器路径；不存在返回 None。"""
+    if sys.platform == "win32":
+        candidate = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+    else:
+        candidate = PROJECT_ROOT / ".venv" / "bin" / "python"
+    return candidate if candidate.is_file() else None
+
+
+def _require_venv_python() -> Path:
+    """获取 .venv 中的 Python，缺失时给出明确提示并退出。"""
+    python = _venv_python()
+    if python is None:
+        print("[upgrade] 未找到 .venv 虚拟环境，请先运行 setup.bat 初始化。")
+        sys.exit(1)
+    return python
+
+
+def _install_npm_dependencies() -> bool:
+    """检测到 web/package.json 变更后，自动安装前端 npm 依赖。成功返回 True。"""
     web_dir = PROJECT_ROOT / "web"
     if not (web_dir / "package.json").exists():
         print("[upgrade] ⚠ web/package.json 不存在，跳过前端依赖安装")
-        return
+        return True
+    # Windows 下 npm 是 npm.cmd，直接用字符串 "npm" 会 FileNotFoundError，
+    # 需通过 shutil.which 定位到完整路径（含 .cmd 扩展名）再执行。
+    npm = shutil.which("npm")
+    if npm is None:
+        print("[upgrade] ⚠ 未检测到 npm，请手动执行: cd web && npm install")
+        return False
     print("[upgrade] 检测到前端依赖变更，正在安装 ...")
     try:
         result = subprocess.run(
-            ["npm", "install"],
+            [npm, "install"],
             cwd=web_dir, capture_output=True, text=True, timeout=120,
         )
         if result.returncode == 0:
             print("[upgrade] ✔ 前端依赖安装完成")
-        else:
-            print(f"[upgrade] ⚠ npm install 失败:\n{result.stderr}")
-    except FileNotFoundError:
-        print("[upgrade] ⚠ 未检测到 npm，请手动执行: cd web && npm install")
+            return True
+        print(f"[upgrade] ⚠ npm install 失败:\n{result.stderr}")
+        return False
     except subprocess.TimeoutExpired:
         print("[upgrade] ⚠ npm install 超时，请手动执行: cd web && npm install")
+        return False
 
 
-def _install_python_dependencies() -> None:
-    """检测到 pyproject.toml 变更后，自动安装后端 Python 依赖。"""
+def _install_python_dependencies() -> bool:
+    """检测到 pyproject.toml 变更后，自动安装后端 Python 依赖。成功返回 True。"""
     if not (PROJECT_ROOT / "pyproject.toml").exists():
         print("[upgrade] ⚠ pyproject.toml 不存在，跳过后端依赖安装")
-        return
+        return True
+    # 必须用 .venv 的 Python 执行，否则依赖会装到启动 upgrade.py 的
+    # 那个解释器（如系统 Python）里，与 .venv 环境不一致。
+    python = _require_venv_python()
     print("[upgrade] 检测到后端依赖变更，正在安装 ...")
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-e", "."],
+            [str(python), "-m", "pip", "install", "-e", "."],
             cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=300,
         )
         if result.returncode == 0:
             print("[upgrade] ✔ 后端依赖安装完成")
-        else:
-            print(f"[upgrade] ⚠ pip install 失败:\n{result.stderr}")
+            return True
+        print(f"[upgrade] ⚠ pip install 失败:\n{result.stderr}")
+        return False
     except FileNotFoundError:
         print("[upgrade] ⚠ 未检测到 pip，请手动执行: pip install -e .")
+        return False
     except subprocess.TimeoutExpired:
         print("[upgrade] ⚠ pip install 超时，请手动执行: pip install -e .")
+        return False
 
 
 def _check_node_version() -> None:
@@ -204,19 +254,45 @@ def _check_node_version() -> None:
         pass
 
 
-def _handle_dependency_changes(changed_files: list[str]) -> None:
-    """根据 pull 拉取的变更文件列表，自动安装对应依赖。"""
-    changed_set = {f.replace("\\", "/") for f in changed_files}
+def _handle_dependency_changes(changed_files: list[str] | None) -> bool:
+    """根据变更文件列表安装对应依赖。changed_files 为 None 表示范围未知，全量检查。
 
-    npm_changed = bool(changed_set & {"web/package.json", "web/package-lock.json"})
-    python_changed = bool(changed_set & {"pyproject.toml", "requirements.txt"})
+    返回本次所有安装是否全部成功。"""
+    changed_set = {f.replace("\\", "/") for f in (changed_files or [])}
 
-    if npm_changed:
-        _install_npm_dependencies()
-    if python_changed:
-        _install_python_dependencies()
+    npm_changed = changed_files is None or bool(
+        changed_set & {"web/package.json", "web/package-lock.json"}
+    )
+    python_changed = changed_files is None or bool(
+        changed_set & {"pyproject.toml", "requirements.txt"}
+    )
+
+    ok = True
+    if npm_changed and not _install_npm_dependencies():
+        ok = False
+    if python_changed and not _install_python_dependencies():
+        ok = False
 
     _check_node_version()
+    return ok
+
+
+def _sync_dependencies(head: str | None) -> None:
+    """确保依赖与当前 HEAD 对齐：仅当依赖状态落后于 HEAD 时安装，全部成功才更新记录。"""
+    last_deps = _read_deps_head()
+    if head is None or last_deps == head:
+        return
+
+    changed = _get_changed_files(last_deps) if last_deps else None
+    if changed == []:
+        # 依赖文件本身无变更，但记录落后说明上次安装未成功，全量重试
+        changed = None
+
+    if _handle_dependency_changes(changed):
+        _write_deps_head(head)
+        print("[upgrade] ✔ 依赖已与当前版本同步")
+    else:
+        print("[upgrade] ⚠ 依赖安装未全部成功，下次运行 upgrade 将自动重试")
 
 
 def main():
@@ -228,17 +304,10 @@ def main():
     applied = read_applied_migrations()
     print(f"[upgrade] 已应用 {len(applied)} 个迁移")
 
-    # 记录 pull 前的 HEAD，用于检测依赖文件变更
-    head_before = _get_head_hash()
-
     git_pull()
 
-    # 若 HEAD 发生变更，检查依赖文件并自动安装
-    head_after = _get_head_hash()
-    if head_before and head_after and head_before != head_after:
-        changed = _get_changed_files(head_before)
-        if changed:
-            _handle_dependency_changes(changed)
+    # 同步依赖：pull 有变更时按变更文件安装；记录落后（上次安装失败）时自动重试
+    _sync_dependencies(_get_head_hash())
 
     pending = discover_pending_migrations(applied)
     if not pending:
