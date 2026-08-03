@@ -32,6 +32,7 @@
           </span>
         </div>
         <ContextUsageBadge :usage="contextUsage" :selected-model="selectedModelName" :has-vision="selectedModelHasVision" />
+        <StudioSelector :studio-name="studioName" @change="setStudioName" />
         <TaskTrackerBar :data="taskTrackerData as any" @dismiss="dismissTaskTracker" />
     </header>
 
@@ -96,6 +97,7 @@ import ChatInput from '@/components/ChatInput.vue'
 import ChatWindow from '@/components/ChatWindow.vue'
 import Icon from '@/components/Icon.vue'
 import ContextUsageBadge from '@/components/ContextUsageBadge.vue'
+import StudioSelector from '@/components/StudioSelector.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import TaskTrackerBar from '@/components/TaskTrackerBar.vue'
 import { useChat } from '@/composables/useChat'
@@ -107,7 +109,7 @@ import type { ProviderConfig } from '@/types'
 import { computed, onMounted, ref } from 'vue'
 
 const { sessionId, sessions } = useSession()
-const { connected, isStreaming, turns, currentTurn, pendingMessages, error, contextUsage, taskTrackerData, send, cancel, sendUserResponse, removeTurns, privateMode, setPrivateMode, skipRecall, setSkipRecall, autoApprove, setAutoApprove } =
+const { connected, isStreaming, turns, currentTurn, pendingMessages, error, contextUsage, taskTrackerData, send, cancel, sendUserResponse, removeTurns, privateMode, setPrivateMode, skipRecall, setSkipRecall, autoApprove, setAutoApprove, studioName, setStudioName } =
   useChat(sessionId)
 const chatStore = useChatStore()
 

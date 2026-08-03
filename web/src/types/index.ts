@@ -241,6 +241,8 @@ export interface ChatMessage {
     image_refs?: string[]
     /** 客户端生成的消息 ID，后端用作 pending_id 以关联入队确认 */
     client_msg_id?: string
+    /** 所选工作坊名称（对应 studios/*.yaml 的 name 字段），未选中时不携带 */
+    studio_name?: string
   }
 }
 
@@ -567,6 +569,36 @@ export interface ListSkillsResponse {
 
 export interface ListMacrosResponse {
   macros: SkillInfo[]
+}
+
+// === 工作坊（Studio） ===
+
+export interface StudioInfo {
+  name: string
+  description: string
+  filename: string
+}
+
+/** STUDIO_SPEC 单字段声明（后端 /studios/schema 返回） */
+export interface StudioFieldSpec {
+  key: string
+  label: string
+  kind: 'text' | 'code' | 'list' | 'keyval' | 'join'
+  description: string
+  empty_text: string
+  item_key?: string
+  item_note?: string
+}
+
+export interface StudioSchemaResponse {
+  fields: StudioFieldSpec[]
+}
+
+/** 工作坊完整文档（YAML dict），未知键原样保留 */
+export type StudioDocument = Record<string, any>
+
+export interface ListStudiosResponse {
+  studios: StudioInfo[]
 }
 
 // === 内置工具 ===

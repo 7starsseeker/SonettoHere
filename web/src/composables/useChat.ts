@@ -65,6 +65,13 @@ export function useChat(sessionId: Ref<string>) {
     store.updateAutoApprove(sessionId.value, val)
   }
 
+  const studioName = computed(() => activeChannelRef.value.studioName)
+
+  function setStudioName(val: string) {
+    const ch = activeChannelRef.value
+    ch.studioName = val
+  }
+
   // Session 切换：持久化旧会话、恢复新会话缓存（优先 localStorage, 其次后端）、确保 WS 连接
   watch(
     sessionId,
@@ -113,5 +120,6 @@ export function useChat(sessionId: Ref<string>) {
     privateMode, setPrivateMode,
     skipRecall, setSkipRecall,
     autoApprove, setAutoApprove,
+    studioName, setStudioName,
   }
 }
