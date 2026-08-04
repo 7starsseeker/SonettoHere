@@ -41,6 +41,12 @@ dev = [
 [tool.setuptools.dynamic]
 version = {attr = "version.__version__"}
 
+[tool.setuptools]
+py-modules = ["version"]
+
+[tool.setuptools.packages.find]
+include = ["agent*", "api*", "config*", "tools*"]
+
 [build-system]
 requires = ["setuptools>=81.0"]
 build-backend = "setuptools.build_meta"
