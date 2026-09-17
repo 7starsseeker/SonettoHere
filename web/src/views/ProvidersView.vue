@@ -138,7 +138,7 @@
           </div>
         </div>
         <button type="button" class="btn sm" @click="selectAllModels">全选</button>
-        <button type="button" class="btn sm" @click="selectedModels = []">取消全选</button>
+        <button type="button" class="btn sm" @click="clearAllModels">取消全选</button>
       </div>
 
       <div class="form-actions">
@@ -273,10 +273,22 @@ async function handleDiscover() {
       selectedModels.value = res.models.filter(m => prevSelected.includes(m))
       modelContextWindows.value = res.model_context_windows ?? {}
     }
+    // 新列表可能不再包含原默认模型，就地校正，避免提交时被后端拒绝
+    reconcileDefaultModel('新拉取的模型列表')
   } catch (e: any) {
     formError.value = e.message
   } finally {
     discovering.value = false
+  }
+}
+
+/** 默认模型不在已选模型列表中时置空并提示（列表为空则任何默认模型都失效）。 */
+function reconcileDefaultModel(listLabel: string) {
+  const dm = form.value.defaultModel
+  if (!dm || selectedModels.value.includes(dm)) return
+  form.value.defaultModel = null
+  if (!defaultModelWarning.value) {
+    defaultModelWarning.value = `默认模型「${dm}」已不在${listLabel}中，已自动取消其默认设置，请重新选择`
   }
 }
 
@@ -291,6 +303,11 @@ function toggleModel(m: string) {
 
 function selectAllModels() {
   selectedModels.value = [...discoveredModels.value]
+}
+
+function clearAllModels() {
+  selectedModels.value = []
+  reconcileDefaultModel('当前选中的模型')
 }
 
 // ── CRUD ──
@@ -338,6 +355,7 @@ function startEdit(p: ProviderConfig) {
   editingModelVision.value = p.model_vision ?? {}
   defaultModelWarning.value = ''
   modelContextWindows.value = p.model_context_windows ?? {}
+  reconcileDefaultModel('当前选中的模型')
   formError.value = ''
   testOk.value = false
 }
@@ -351,6 +369,12 @@ async function handleSave() {
   saving.value = true
   formError.value = ''
   try {
+    // 兜底：默认模型必须属于已选模型，否则后端拒绝（400）
+    const dm = form.value.defaultModel
+    if (dm && !selectedModels.value.includes(dm)) {
+      formError.value = `默认模型「${dm}」不在已选模型列表中，请重新指定默认模型`
+      return
+    }
     const body: any = {
       id: form.value.id || form.value.label.toLowerCase().replace(/\s+/g, '-'),
       provider_type: form.value.provider_type,
@@ -358,6 +382,7 @@ async function handleSave() {
       api_key: form.value.api_key,
       base_url: form.value.base_url,
       models: selectedModels.value,
+      default_model: dm || null,
       enabled: true,
     }
     if (isEditing.value) {
@@ -367,7 +392,7 @@ async function handleSave() {
         base_url: body.base_url,
         models: body.models,
         is_default_provider: form.value.isDefaultProvider,
-        default_model: form.value.defaultModel || null,
+        default_model: body.default_model,
       }
       if (form.value.api_key) updateBody.api_key = form.value.api_key
       await api.updateProvider(editingId.value, updateBody)
