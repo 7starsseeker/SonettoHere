@@ -124,6 +124,7 @@
               <span class="model-name-text"><span v-html="highlightName(m)"></span><span v-if="modelContextWindows[m]" class="ctx-badge">{{ fmtCtx(modelContextWindows[m]) }}</span></span>
               <span v-if="editingModelVision[m] === true" class="vision-badge">视觉</span>
               <span v-else-if="editingModelVision[m] === false" class="vision-badge no-vision">无视觉</span>
+              <span v-else class="vision-badge unknown-vision" title="保存后自动检测">未检测</span>
             </label>
             <div class="model-actions">
               <button
@@ -244,6 +245,16 @@ const filteredModels = computed(() => {
 // ── 视觉能力 ──
 const editingModelVision = ref<Record<string, boolean>>({})
 
+/** 拉取后同步视觉徽章：丢弃已消失模型的旧结果，新模型留作「未检测」（保存时检测）。 */
+function syncModelVision() {
+  const known = editingModelVision.value
+  const next: Record<string, boolean> = {}
+  for (const m of discoveredModels.value) {
+    if (known[m] !== undefined) next[m] = known[m]
+  }
+  editingModelVision.value = next
+}
+
 // ── 上下文窗口（拉取后缓存） ──
 const modelContextWindows = ref<Record<string, number>>({})
 
@@ -275,6 +286,7 @@ async function handleDiscover() {
     }
     // 新列表可能不再包含原默认模型，就地校正，避免提交时被后端拒绝
     reconcileDefaultModel('新拉取的模型列表')
+    syncModelVision()
   } catch (e: any) {
     formError.value = e.message
   } finally {
@@ -618,6 +630,12 @@ onMounted(loadProviders)
 .vision-badge.no-vision {
   background: #f3f4f6;
   color: #9ca3af;
+}
+.vision-badge.unknown-vision {
+  background: transparent;
+  border: 1px dashed #d1d5db;
+  color: #9ca3af;
+  padding: 0 5px;
 }
 .ctx-badge {
   font-size: 10px;
